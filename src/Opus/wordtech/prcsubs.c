@@ -2345,7 +2345,7 @@ int cb;
 /* given a prm return a pointer to the list of sprm (pgrpprl) and return
 	the length of the grpprl */
 /* %%Function:PgrpprlFromPrm %%Owner:davidlu */
-PgrpprlFromPrm(prm, pcb, grpprl)
+char *PgrpprlFromPrm(prm, pcb, grpprl)
 struct PRM prm;
 int *pcb;
 char *grpprl; /* user provided buffer for unloading sprm from piece table */

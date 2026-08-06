@@ -20,6 +20,9 @@ DEBUGASSERTSZ            /* WIN - bogus macro for assert string */
 #include "ruler.h"
 #include "pic.h"
 #include "error.h"
+#ifdef OPUS_X64
+#include <stdlib.h>
+#endif
 #ifdef MAC
 #include "mac.h"
 #include "toolbox.h"
@@ -966,6 +969,79 @@ WORD wParam;
 
 	return 0;
 }
+
+#ifdef OPUS_X64
+/* Native SDM bridge.  The historical parser expects a segmented SDM parse
+   object, which no longer exists on x64.  Keep the actual Word font mapping
+   in this original module and expose flat-string adapters to the native
+   control layer. */
+EXPORT int OpusX64FtcFromFontName(sz)
+const char *sz;
+{
+	int cch;
+	struct FFN *pffn;
+	char rgch[cbFfnLast];
+
+	pffn = (struct FFN *)rgch;
+	if (sz == NULL || *sz == '\0')
+		return wNinch;
+	if (CchSz(sz) > LF_FACESIZE - 1)
+		{
+		bltbyte(sz, pffn->szFfn, LF_FACESIZE - 1);
+		pffn->szFfn[LF_FACESIZE - 1] = '\0';
+		cch = LF_FACESIZE;
+		}
+	else
+		cch = CchCopySz(sz, pffn->szFfn);
+	cch = CchStripString(pffn->szFfn, cch);
+	if (cch == 0)
+		return wNinch;
+	return FtcValidateFont(pffn);
+}
+
+EXPORT int OpusX64HpsFromFontSize(sz)
+const char *sz;
+{
+	char *pchEnd;
+	double points;
+	int hps;
+
+	if (sz == NULL || *sz == '\0')
+		return wNinch;
+	points = strtod(sz, &pchEnd);
+	while (*pchEnd == ' ' || *pchEnd == '\t')
+		++pchEnd;
+	if (*pchEnd != '\0')
+		return wError;
+	hps = (int)(points * 2.0 + 0.5);
+	/* CHP stores the size in one unsigned byte.  The original parser's
+	   4..127 point range becomes 8..254 after conversion to half-points. */
+	if (hps < 8 || hps > 254)
+		return wError;
+	return hps;
+}
+
+EXPORT void OpusX64FontNameFromFtc(ftc, sz, cchMax)
+int ftc;
+char *sz;
+int cchMax;
+{
+	int ibst;
+	char *szFont;
+
+	if (sz == NULL || cchMax <= 0)
+		return;
+	*sz = '\0';
+	if (ftc == wNinch || selCur.doc == docNil)
+		return;
+	ibst = IbstFontFromFtcDoc(ftc, selCur.doc);
+	if (ibst == iNil)
+		return;
+	szFont = ((struct FFN *)PstFromSttb(vhsttbFont, ibst))->szFfn;
+	bltbyte(szFont, sz, min(CchSz(szFont), cchMax));
+	sz[cchMax - 1] = '\0';
+}
+#endif
 
 
 #endif /* WIN */

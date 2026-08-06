@@ -78,15 +78,15 @@ union FCID
 		struct
 				{
 				/* wProps */
-				int             fBold: 1;   /* bold, italics in same position as chp */
-				int             fItalic: 1;
-				int             fStrike: 1;
-				int             kul: 3;
-		int		prq: 2;		/* pitch request */
-				int             hps: 8;
+				unsigned int    fBold: 1;   /* bold, italics in same position as chp */
+				unsigned int    fItalic: 1;
+				unsigned int    fStrike: 1;
+				unsigned int    kul: 3;
+		unsigned int	prq: 2;		/* pitch request */
+				unsigned int    hps: 8;
 				/* wExtra */
-				int 		ibstFont: 8;    /* index into master font table */
-		int		: 8;
+				unsigned int 	ibstFont: 8;    /* index into master font table */
+		unsigned int	: 8;
 				};
 		};
 

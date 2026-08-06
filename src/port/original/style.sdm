@@ -1,2 +1,6 @@
-/* Template boundary for the original Opus/dlg/style.des description. */
-DLG_CONST DLT dltApplyStyle = { 0 };
+/* Regenerated header from Opus/dlg/style.des. */
+extern BOOL FDlgApplyStyle(DLM, TMC, WORD, WORD, WORD);
+DLG_CONST DLT dltApplyStyle = {
+    { 32, 16, 150, 102 }, IDDApplyStyle, tmcASStyle, FDlgApplyStyle,
+    6, bdrSysMenu, { 0 }
+};

@@ -1,5 +1,6 @@
-/*
- * Compile-only boundary for Opus/dlg/edstyle.des.  Regenerate the complete
- * template with the ported historical dialog compiler before activation.
- */
-DLG_CONST DLT dltDefineStyle = { 0 };
+/* Regenerated header from Opus/dlg/edstyle.des. */
+extern BOOL FDlgDefineStyle(DLM, TMC, WORD, WORD, WORD);
+DLG_CONST DLT dltDefineStyle = {
+    { 34, 18, 188, 101 }, IDDDefineStyle, tmcDSStyle, FDlgDefineStyle,
+    19, bdrSysMenu, { 0 }
+};

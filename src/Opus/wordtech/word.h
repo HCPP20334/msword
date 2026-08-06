@@ -64,7 +64,16 @@ typedef long FC;
 
 typedef unsigned PN;  /* 512 byte page */
 typedef unsigned PO; /* 128 byte page (Old page format) */
+#ifdef OPUS_X64
+/* The page-cache LRU clock was a wrapping Win16 word.  Leaving TS as a
+ * native 32-bit unsigned value lets tsMruBps grow past tsMax (0xffff), after
+ * which no old cache page compares as eligible and the fallback can evict
+ * vibpProtect.  That replaces the character page still referenced by
+ * vhpchFetch with an FKP formatting page during mixed-font line fetches. */
+typedef unsigned short TS;	/* TS = wrapping 16-bit time stamp */
+#else
 typedef unsigned TS;	    /* TS = time stamp */
+#endif
 
 typedef unsigned uns;
 #ifndef OPUS_X64
@@ -828,6 +837,7 @@ CP CpFirstTap1();
 CP CpTableFirst();
 CP CpTableLim();
 struct SEL *PselActive();
+char *PgrpprlFromPrm();
 CP CpSkipFormula();
 CP CpScaleThumb();
 struct PLC **HplcedlWw();

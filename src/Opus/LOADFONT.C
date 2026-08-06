@@ -807,9 +807,17 @@ LOGFONT *plf;
 int fPrinterFont;
 {   /* Translate an FCID into a windows logical font request structure */
 	int ps;
+	int ibstFont;
 	struct FFN *pffn;
 
 	SetBytes(plf, 0, sizeof(LOGFONT));
+#ifdef OPUS_X64
+	/* Word's selection engine deliberately XOR-inverts rendered glyphs.
+	   ClearType's per-channel subpixels turn into colored fringes under that
+	   operation, so request grayscale antialiasing for screen fonts. */
+	if (!fPrinterFont)
+		plf->lfQuality = 4; /* ANTIALIASED_QUALITY */
+#endif
 
 /* Scale the request into device units */
 
@@ -824,11 +832,33 @@ int fPrinterFont;
 		screen fonts, use positive lfHeight, meaning choose the font by 
 		CELL height instead of CHARACTER height. 
 		ChrisLa says this fiasco is Aldus' fault. */
-	if (fcid.ibstFont != ibstCourier || fPrinterFont)
+	ibstFont = (int)fcid.ibstFont;
+	if (ibstFont != ibstCourier || fPrinterFont)
 		plf->lfHeight = -plf->lfHeight;
 
-	Assert( fcid.ibstFont < (*vhsttbFont)->ibstMac );
-	pffn = PstFromSttb( vhsttbFont, fcid.ibstFont );
+#ifdef OPUS_X64
+	/* A damaged or partially converted document font map must not turn a
+	   failed STTB lookup into a null dereference in GDI setup.  Use Word's
+	   default master font entry as the recoverable display fallback. */
+	if (vhsttbFont == hNil || *vhsttbFont == NULL)
+		{
+		plf->lfPitchAndFamily = fcid.prq;
+		plf->lfCharSet = DEFAULT_CHARSET;
+		return fTrue;
+		}
+	if (ibstFont < 0 || ibstFont >= (*vhsttbFont)->ibstMac)
+		ibstFont = ibstFontDefault;
+#endif
+	Assert( ibstFont < (*vhsttbFont)->ibstMac );
+	pffn = PstFromSttb( vhsttbFont, ibstFont );
+#ifdef OPUS_X64
+	if (pffn == NULL)
+		{
+		plf->lfPitchAndFamily = fcid.prq;
+		plf->lfCharSet = DEFAULT_CHARSET;
+		return fTrue;
+		}
+#endif
 /* bits 0-1: pitch request
 	bits 4-6: font family */
 	plf->lfPitchAndFamily = (pffn->ffid & maskFfFfid) | fcid.prq;

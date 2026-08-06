@@ -1140,7 +1140,10 @@ IBDlgLoop()
 				KME * pkme;
 
 				pkme = PkmeOfKcInChain(KcModified(vmsgLast.wParam & 0xff));
-				if (pkme->kt == ktMacro)
+				/* A printable key need not be present in the command key map.
+				   The 16-bit build happened to tolerate the resulting nil pointer;
+				   Win64 does not.  Only inspect the entry when one was found. */
+				if (pkme != NULL && pkme->kt == ktMacro)
 					{
 					HDLG hdlgFocus = HdlgGetFocus();
 					HDLG hdlgOld = HdlgSetCurDlg(hdlgFocus);

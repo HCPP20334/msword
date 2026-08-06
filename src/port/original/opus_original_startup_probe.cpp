@@ -12,6 +12,30 @@ extern "C" int WINAPI OpusOriginalWinMain(HINSTANCE instance,
                                              HINSTANCE previous,
                                              LPSTR command_line,
                                              int show_command);
+using OpusOriginalListProc = unsigned short (*)(
+    unsigned short, char*, int, unsigned short, unsigned short,
+    unsigned short);
+using OpusFontValueProc = int (*)(const char*);
+using OpusFontNameFromValueProc = void (*)(int, char*, int);
+extern "C" unsigned short WListFontName(unsigned short, char*, int,
+                                          unsigned short, unsigned short,
+                                          unsigned short);
+extern "C" unsigned short WListFontSize(unsigned short, char*, int,
+                                          unsigned short, unsigned short,
+                                          unsigned short);
+extern "C" unsigned short WListStyles(unsigned short, char*, int,
+                                        unsigned short, unsigned short,
+                                        unsigned short);
+extern "C" unsigned short Look1WListEntbl(unsigned short, char*, int,
+                                            unsigned short, unsigned short,
+                                            unsigned short);
+extern "C" int OpusX64FtcFromFontName(const char*);
+extern "C" int OpusX64HpsFromFontSize(const char*);
+extern "C" void OpusX64FontNameFromFtc(int, char*, int);
+extern "C" void OpusRegisterOriginalDialogCallbacks(
+    OpusOriginalListProc, OpusOriginalListProc, OpusOriginalListProc,
+    OpusOriginalListProc, OpusFontValueProc, OpusFontValueProc,
+    OpusFontNameFromValueProc);
 
 namespace {
 
@@ -34,6 +58,22 @@ void BuildDiagnosticPath(const char* file_name, char* path, size_t path_size) {
     }
     std::snprintf(path, path_size, "%s\\build\\%s", module_path,
                   file_name);
+}
+
+void ResetRibbonTrace() {
+    char trace_path[MAX_PATH] = {};
+    BuildDiagnosticPath("WORD1-ribbon.txt", trace_path, sizeof(trace_path));
+    HANDLE file = CreateFileA(trace_path, GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    char header[128] = {};
+    std::snprintf(header, sizeof(header), "WORD1 ribbon trace pid=%lu\r\n",
+                  GetCurrentProcessId());
+    WriteCrashText(file, header);
+    CloseHandle(file);
 }
 
 void WriteCurrentStack(HANDLE file, unsigned frames_to_skip) {
@@ -334,6 +374,28 @@ LONG WINAPI ObserveVectoredException(EXCEPTION_POINTERS* exception) {
 
 }  // namespace
 
+extern "C" void OpusX64TraceRibbon(const char* stage, int message, int tmc,
+                                    int first_value, int second_value,
+                                    long cp_first, long cp_limit,
+                                    int insertion) {
+    char trace_path[MAX_PATH] = {};
+    BuildDiagnosticPath("WORD1-ribbon.txt", trace_path, sizeof(trace_path));
+    HANDLE file = CreateFileA(trace_path, FILE_APPEND_DATA,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                              OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    char line[384] = {};
+    std::snprintf(line, sizeof(line),
+                  "%llu %s msg=%d tmc=%d a=%d b=%d sel=%ld,%ld ins=%d\r\n",
+                  static_cast<unsigned long long>(GetTickCount64()),
+                  stage != nullptr ? stage : "", message, tmc, first_value,
+                  second_value, cp_first, cp_limit, insertion);
+    WriteCrashText(file, line);
+    CloseHandle(file);
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous,
                     PWSTR command_line, int show_command) {
     if ((command_line != nullptr &&
@@ -345,6 +407,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous,
     SetUnhandledExceptionFilter(WriteCrashStack);
     AddVectoredExceptionHandler(1, ObserveVectoredException);
     _RTC_SetErrorFuncW(WriteRtcFailure);
+    ResetRibbonTrace();
+
+    /* The native SDM shim owns the controls, while Microsoft's original
+       callbacks still own every font, point-size, color, and style list. */
+    OpusRegisterOriginalDialogCallbacks(WListFontName, WListFontSize,
+                                        WListStyles, Look1WListEntbl,
+                                        OpusX64FtcFromFontName,
+                                        OpusX64HpsFromFontSize,
+                                        OpusX64FontNameFromFtc);
 
     char command_line_ansi[32768] = {};
     if (command_line != nullptr) {

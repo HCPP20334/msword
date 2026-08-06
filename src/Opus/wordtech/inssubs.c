@@ -754,7 +754,13 @@ get operate efficiently beyond the Eof */
 #ifdef MAC
 		*(hpbFirst + sizeof(FC) + crun) = (!fWord3) ? (bCur / sizeof(int)) : bCur;
 #else /* WIN */
+		/* The FKP byte stores an offset in 16-bit words.  That is part of
+		 * the document/scratch-page format, not the host C int width. */
+#ifdef OPUS_X64
+		*(hpbFirst + sizeof(FC) + crun) = bCur >> 1;
+#else
 		*(hpbFirst + sizeof(FC) + crun) = bCur / sizeof(int);
+#endif
 #endif /* WIN */
 		*((FC HUGE *)hpbFirst) = fcLim;
 		pfkpd->bFreeFirst += sizeof(FC) + 1;

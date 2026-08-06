@@ -1,7 +1,9 @@
 #pragma once
 
-/*
- * Compile-stage template boundary for Opus/dlg/char.des.  The native SDM
- * resource compiler/runtime will replace this descriptor during UI bring-up.
- */
-DLG_CONST DLT dltCharacter = { 0 };
+/* Regenerated header from Opus/dlg/char.des.  The x64 SDM runtime consumes
+   the header and materializes the archived controls as native Win32 items. */
+extern BOOL FDlgCharacter(DLM, TMC, WORD, WORD, WORD);
+DLG_CONST DLT dltCharacter = {
+    { 34, 38, 180, 152 }, IDDCharacter, tmcCharName, FDlgCharacter,
+    24, bdrSysMenu, { 0 }
+};

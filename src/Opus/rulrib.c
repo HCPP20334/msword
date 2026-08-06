@@ -1652,6 +1652,9 @@ WORD iibb;
 WORD wParam;
 LONG lParam;
 {
+#ifdef OPUS_X64
+	extern void OpusX64TraceRibbon();
+#endif
 	switch (ibm)
 		{
 	case ibmDblClk:
@@ -1685,6 +1688,12 @@ LONG lParam;
 			int ftc = ValGetIibbHwndIb(hwnd, IDLKSFONT);
 			int hps = ValGetIibbHwndIb(hwnd, IDLKSPOINT);
 
+#ifdef OPUS_X64
+			OpusX64TraceRibbon("original-term", ibm, iibb, ftc, hps,
+					(long)selCur.cpFirst, (long)selCur.cpLim,
+					selCur.fIns);
+#endif
+
 			Assert (vssc == sscNil);
 			if (ftc >= 0)
 				{
@@ -1699,6 +1708,12 @@ LONG lParam;
 			if (cch > 0)
 				{
 				ApplyGrpprlSelCur(grpprl, cch, fTrue);
+#ifdef OPUS_X64
+				OpusX64TraceRibbon("original-applied", ibm, cch,
+						selCur.chp.ftc, selCur.chp.hps,
+						(long)selCur.cpFirst, (long)selCur.cpLim,
+						selCur.fIns);
+#endif
 				if (!vmerr.fMemFail)
 					FSetAgainGrpprl(grpprl, cch, bcmFormatting);
 

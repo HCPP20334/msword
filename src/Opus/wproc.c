@@ -91,6 +91,11 @@ struct CA       caPara;
 struct CA       caPage;
 struct CA       caSect;
 struct CA       caTable;
+#ifdef OPUS_X64
+extern struct FTI vfti;
+extern char             (**vhgrpchr)[];
+extern int              vbchrMac;
+#endif
 extern struct FCB     **mpfnhfcb[];
 extern int 		      vfnPreload;
 extern int		      vcPreload;
@@ -372,6 +377,10 @@ extern struct RF	vrf;
 extern BOOL             vfInCommit;
 extern int              cbMemChunk;
 extern struct BPTB      vbptbExt;
+#ifdef OPUS_X64
+extern int              vibp;
+extern int              vibpProtect;
+#endif
 extern int		vgrfMenuKeysAreDirty;
 extern BOOL		vfEmptyMenu;
 
@@ -1589,6 +1598,141 @@ LONG      lParam;
 				GetPlc(pdr->hplcedl, (int) lParam, &edl);
 				return LOWORD(wParam) == 47 ?
 						(LRESULT) edl.dlk : (LRESULT) edl.fEnd;
+				}
+			case 49: return (LRESULT) selCur.chp.ftc;
+			case 50: return (LRESULT) selCur.chp.hps;
+			case 51:
+			case 52:
+				{
+				CP cp = (CP) lParam;
+				if (cp < cp0 || cp >= CpMacDocEdit(selCur.doc))
+					return (LRESULT) -1;
+				FetchCp(selCur.doc, cp, fcmProps);
+				return LOWORD(wParam) == 51 ?
+						(LRESULT) vchpFetch.ftc : (LRESULT) vchpFetch.hps;
+				}
+			case 53:
+				return (LRESULT) IbstFontFromFtcDoc(selCur.chp.ftc,
+						selCur.doc);
+			case 54:
+				{
+				union FCID fcid;
+				fcid.lFcid = 0L;
+				fcid.ibstFont = (int)lParam;
+				return (LRESULT) fcid.ibstFont;
+				}
+			case 58:
+				return (LRESULT) sizeof(union FCID);
+			case 55:
+			case 56:
+			case 57:
+				InvalFli();
+				FormatLine(selCur.ww, selCur.doc, (CP)lParam);
+				if (LOWORD(wParam) == 55)
+					return (LRESULT) vfli.dypLine;
+				if (LOWORD(wParam) == 56)
+					return (LRESULT) vfti.fcid.hps;
+				return (LRESULT) (vfti.dypAscent + vfti.dypDescent);
+			case 59:
+			case 60:
+			case 61:
+			case 62:
+				{
+				int bchr = 0;
+				int cchp = 0;
+				int hpsChpMax = 0;
+				int hpsFcidMax = 0;
+				int ichMax = 0;
+				InvalFli();
+				FormatLine(selCur.ww, selCur.doc, (CP)lParam);
+				while (bchr < vbchrMac)
+					{
+					struct CHR *pchr =
+							(struct CHR *)&(**vhgrpchr)[bchr];
+					int cb = CbFromChrm(pchr->chrm);
+					if (cb <= 0 || cb > vbchrMac - bchr)
+						break;
+					if (pchr->chrm == chrmChp)
+						{
+						++cchp;
+						hpsChpMax = max(hpsChpMax,
+								(int)pchr->chp.hps);
+						hpsFcidMax = max(hpsFcidMax,
+								(int)pchr->fcid.hps);
+						ichMax = max(ichMax,
+								(int)(unsigned char)pchr->ich);
+						}
+					bchr += cb;
+					}
+				if (LOWORD(wParam) == 59) return (LRESULT) hpsChpMax;
+				if (LOWORD(wParam) == 60) return (LRESULT) hpsFcidMax;
+				if (LOWORD(wParam) == 61) return (LRESULT) cchp;
+				return (LRESULT) ichMax;
+				}
+			case 63:
+				InvalFli();
+				FormatLine(selCur.ww, selCur.doc, cp0);
+				if ((int)lParam < 0 || (int)lParam >= vfli.ichMac)
+					return (LRESULT) -1;
+				return (LRESULT) vfli.rgdxp[(int)lParam];
+			case 64:
+			case 65:
+			case 66:
+			case 67:
+				{
+				struct DR *pdr = PdrGalley(PwwdWw(WwFromHwnd(hwnd)));
+				CP cp = CpPlc(pdr->hplcedl, 0);
+				InvalFli();
+				FormatLineDr(selCur.ww, cp, pdr);
+				if (LOWORD(wParam) == 64)
+					{
+					if ((int)lParam < 0 || (int)lParam >= vfli.ichMac)
+						return (LRESULT) -1;
+					return (LRESULT) vfli.rgdxp[(int)lParam];
+					}
+				if (LOWORD(wParam) == 65) return (LRESULT) vfli.dxsInch;
+				if (LOWORD(wParam) == 66) return (LRESULT) vfli.dxuInch;
+				return (LRESULT) vfti.dxpInch;
+				}
+			case 68:
+				{
+				int ich = (int)HIWORD(wParam);
+				InvalFli();
+				FormatLine(selCur.ww, selCur.doc, (CP)lParam);
+				if (ich < 0 || ich >= vfli.ichMac)
+					return (LRESULT)-1;
+				return (LRESULT)(unsigned char)vfli.rgch[ich];
+				}
+			case 69:
+				{
+				CP cp = (CP)lParam;
+				if (cp < cp0 || cp >= CpMacDoc(selCur.doc))
+					return (LRESULT)-1;
+				FetchCp(selCur.doc, cp, fcmChars);
+				if (vccpFetch <= 0 || vhpchFetch == NULL)
+					return (LRESULT)-1;
+				return (LRESULT)(unsigned char)*vhpchFetch;
+				}
+			case 70:
+				{
+				CP cp = (CP)lParam;
+				if (cp < cp0 || cp >= CpMacDoc(selCur.doc))
+					return (LRESULT)-1;
+				FetchCp(selCur.doc, cp,
+						fcmChars + fcmProps + fcmParseCaps);
+				if (vccpFetch <= 0 || vhpchFetch == NULL)
+					return (LRESULT)-1;
+				return (LRESULT)(unsigned char)*vhpchFetch;
+				}
+			case 71:
+				{
+				CP cp = (CP)lParam;
+				if (cp < cp0 || cp >= CpMacDoc(selCur.doc))
+					return (LRESULT)-1;
+				FetchCp(selCur.doc, cp,
+						fcmChars + fcmProps + fcmParseCaps);
+				return (LRESULT)MAKELONG((WORD)vibpProtect,
+						(WORD)vibp);
 				}
 			}
 		return (LRESULT) -1;

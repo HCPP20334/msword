@@ -208,6 +208,14 @@ TLV *ptlv;
 	CP cpLim;
 	CP dcp;
 	BOOL fSkipInval = fFalse;
+#ifdef OPUS_X64
+	/* The fast insert path updates EDL character counts in place.  That is
+	 * insufficient when a newly committed character run has taller font
+	 * metrics than the existing line: the old EDL height can survive until a
+	 * later repaint and clip both this line and the lines below it. */
+	CP cpFirstCommitted = cpInsert;
+	int cchCommitted = ichInsert;
+#endif
 #ifdef WIN
 	int cchInsert;
 #else /* MAC */
@@ -323,6 +331,11 @@ have to be updated */
 
 #ifdef WIN
 LSkipInval:
+#ifdef OPUS_X64
+	if (fEnd && cchCommitted > 0 && cpFirstCommitted != cpNil)
+		InvalCp(PcaSetDcp(&caT, selCur.doc, cpFirstCommitted,
+				(CP)cchCommitted));
+#endif
 	if (vfRecording && ptlv->fInsertLoop)
 		RecordInsert(ichInsert, ptlv);
 	if (vfRecordNext && (ptlv->fRecordBksp || fEnd))

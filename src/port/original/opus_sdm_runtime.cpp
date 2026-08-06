@@ -5,6 +5,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -18,6 +19,7 @@ extern std::uintptr_t wRefDlgCur;
 extern HWND vhWndMsgBoxParent;
 void GetCabSz(void**, char*, std::uint16_t, std::uint16_t);
 int FSetCabSz(void**, const char*, std::uint16_t);
+void OpusX64TraceRibbon(const char*, int, int, int, int, long, long, int);
 }
 
 /*
@@ -35,6 +37,9 @@ using Dword = std::uint32_t;
 using Hdlg = Word;
 using Tmc = Word;
 using Hcab = void**;
+using OriginalListProc = Word (*)(Word, char*, int, Word, Word, Word);
+using FontValueProc = int (*)(const char*);
+using FontNameFromValueProc = void (*)(int, char*, int);
 
 struct Rec {
     int x;
@@ -104,6 +109,13 @@ Hdlg g_current_dialog = 0;
 Hdlg g_focus_dialog = 0;
 bool g_initialized = false;
 bool g_noninteractive = false;
+OriginalListProc g_list_font_name = nullptr;
+OriginalListProc g_list_font_size = nullptr;
+OriginalListProc g_list_styles = nullptr;
+OriginalListProc g_list_character_color = nullptr;
+FontValueProc g_font_name_to_value = nullptr;
+FontValueProc g_font_size_to_value = nullptr;
+FontNameFromValueProc g_font_name_from_value = nullptr;
 
 constexpr Word kDlmInit = 0x0001;
 constexpr Word kDlmTerm = 0x0003;
@@ -111,10 +123,45 @@ constexpr Word kDlmExit = 0x0004;
 constexpr Word kDlmChange = 0x0005;
 constexpr Word kDlmClick = 0x0006;
 constexpr Word kDlmDblClk = 0x0007;
+constexpr Word kDlmSetItemFocus = 0x000b;
+constexpr Word kDlmKillItemFocus = 0x000c;
+constexpr Word kDlmSetDialogFocus = 0x000d;
+constexpr Word kDlmKillDialogFocus = 0x000e;
+constexpr Word kDlmDialogClick = 0x0012;
+constexpr UINT kWmCommitRibbonSelection = WM_APP + 0x352;
 constexpr Word kIddNewDoc = 2;
 constexpr Word kIddOpen = 3;
+constexpr Word kIddCharacter = 16;
+constexpr Word kIddApplyStyle = 23;
+constexpr Word kIddDefineStyle = 24;
+constexpr Word kCxtRibbonIconBar = 0x8005;
+constexpr Word kCxtRulerIconBar = 0x8006;
 constexpr Tmc kTmcOk = 1;
 constexpr Tmc kTmcCancel = 2;
+constexpr Tmc kTmcUserMin = 0x0400;
+constexpr Tmc kTmcCharacterName = kTmcUserMin;
+constexpr Tmc kTmcCharacterSize = kTmcUserMin + 2;
+constexpr Tmc kTmcCharacterColor = kTmcUserMin + 4;
+constexpr Tmc kTmcApplyStyle = kTmcUserMin;
+constexpr Tmc kTmcApplyDefine = kTmcUserMin + 2;
+constexpr Tmc kTmcApplyBanter = kTmcUserMin + 3;
+constexpr Tmc kTmcDefineStyle = kTmcUserMin;
+constexpr Tmc kTmcDefineChars = kTmcUserMin + 2;
+constexpr Tmc kTmcDefineParas = kTmcUserMin + 3;
+constexpr Tmc kTmcDefineTabs = kTmcUserMin + 4;
+constexpr Tmc kTmcDefinePosition = kTmcUserMin + 5;
+constexpr Tmc kTmcDefineOptions = kTmcUserMin + 6;
+constexpr Tmc kTmcDefineBanter = kTmcUserMin + 7;
+constexpr Tmc kTmcDefineBasedOn = kTmcUserMin + 8;
+constexpr Tmc kTmcDefineNext = kTmcUserMin + 10;
+constexpr Tmc kTmcDefineTemplate = kTmcUserMin + 12;
+constexpr Tmc kTmcDefineCommit = kTmcUserMin + 13;
+constexpr Tmc kTmcDefineDelete = kTmcUserMin + 14;
+constexpr Tmc kTmcDefineRename = kTmcUserMin + 15;
+constexpr Tmc kTmcDefineMerge = kTmcUserMin + 16;
+constexpr Word kTmmCount = 2;
+constexpr Word kTmmText = 3;
+constexpr Word kUnknownListCount = 0xffff;
 constexpr Tmc kTmcSummary = 0x0400;
 constexpr Tmc kTmcNewDot = 0x0401;
 constexpr Tmc kTmcRNewDoc = 0x0402;
@@ -198,7 +245,9 @@ ATOM ensure_native_dialog_class() {
 
 HWND create_dialog_host(const DialogState& dialog, const Dli* initializer) {
     if (dialog.modal &&
-        (dialog.hid == kIddOpen || dialog.hid == kIddNewDoc)) {
+        (dialog.hid == kIddOpen || dialog.hid == kIddNewDoc ||
+         dialog.hid == kIddCharacter || dialog.hid == kIddApplyStyle ||
+         dialog.hid == kIddDefineStyle)) {
         if (ensure_native_dialog_class() == 0) {
             return nullptr;
         }
@@ -237,8 +286,21 @@ HWND create_dialog_host(const DialogState& dialog, const Dli* initializer) {
                       (anchor.right - anchor.left - width) / 2;
         const int y = anchor.top +
                       (anchor.bottom - anchor.top - height) / 2;
-        const char* const caption =
-            dialog.hid == kIddNewDoc ? "New" : "Open";
+        const char* caption = "Open";
+        switch (dialog.hid) {
+            case kIddNewDoc:
+                caption = "New";
+                break;
+            case kIddCharacter:
+                caption = "Character";
+                break;
+            case kIddApplyStyle:
+                caption = "Apply Style";
+                break;
+            case kIddDefineStyle:
+                caption = "Define Style";
+                break;
+        }
         return CreateWindowExA(
             extended_style, "OpusSdmDialog", caption, style, x, y, width,
             height, owner, nullptr, GetModuleHandleW(nullptr),
@@ -248,6 +310,9 @@ HWND create_dialog_host(const DialogState& dialog, const Dli* initializer) {
 
     if (initializer == nullptr || initializer->hwnd == nullptr ||
         !IsWindow(initializer->hwnd)) {
+        return nullptr;
+    }
+    if (ensure_native_dialog_class() == 0) {
         return nullptr;
     }
 
@@ -270,9 +335,10 @@ HWND create_dialog_host(const DialogState& dialog, const Dli* initializer) {
        inherited without depending on that retired message. */
     const DWORD style =
         WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
-    return CreateWindowExA(0, "STATIC", "", style, x, y, width, height,
-                           initializer->hwnd, nullptr,
-                           GetModuleHandleW(nullptr), nullptr);
+    return CreateWindowExA(
+        0, "OpusSdmDialog", "", style, x, y, width, height,
+        initializer->hwnd, nullptr, GetModuleHandleW(nullptr),
+        reinterpret_cast<void*>(static_cast<std::uintptr_t>(dialog.handle)));
 }
 
 HWND create_native_control(DialogState& dialog, const Tmc tmc,
@@ -339,6 +405,36 @@ void create_untracked_control(DialogState& dialog, const char* window_class,
     }
 }
 
+bool window_is_class(const HWND window, const char* expected) {
+    if (window == nullptr || !IsWindow(window)) {
+        return false;
+    }
+    char actual[32] = {};
+    return GetClassNameA(window, actual, static_cast<int>(sizeof(actual))) != 0 &&
+           _stricmp(actual, expected) == 0;
+}
+
+void add_entry_to_native_control(const ControlState& state,
+                                 const std::string& entry) {
+    if (state.window == nullptr || !IsWindow(state.window)) {
+        return;
+    }
+    const UINT message =
+        window_is_class(state.window, "COMBOBOX") ? CB_ADDSTRING : LB_ADDSTRING;
+    SendMessageA(state.window, message, 0,
+                 reinterpret_cast<LPARAM>(entry.c_str()));
+}
+
+void reset_native_list(ControlState& state) {
+    if (state.window == nullptr || !IsWindow(state.window)) {
+        return;
+    }
+    const UINT message = window_is_class(state.window, "COMBOBOX")
+                             ? CB_RESETCONTENT
+                             : LB_RESETCONTENT;
+    SendMessageA(state.window, message, 0, 0);
+}
+
 std::string join_path(const std::string& directory,
                       const std::string& leaf) {
     if (directory.empty()) {
@@ -352,10 +448,7 @@ void add_native_list_entry(DialogState& dialog, const Tmc tmc,
                            const std::string& entry) {
     auto& state = dialog.controls[tmc];
     state.entries.push_back(entry);
-    if (state.window != nullptr && IsWindow(state.window)) {
-        SendMessageA(state.window, LB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(entry.c_str()));
-    }
+    add_entry_to_native_control(state, entry);
 }
 
 void set_open_directory_label(DialogState& dialog) {
@@ -690,41 +783,580 @@ void materialize_open_template(DialogState& dialog) {
     read_open_cab(dialog);
 }
 
+bool is_font_name_control(const DialogState& dialog, const Tmc tmc) {
+    return (dialog.hid == kCxtRibbonIconBar && tmc == kTmcUserMin) ||
+           (dialog.hid == kIddCharacter && tmc == kTmcCharacterName);
+}
+
+bool is_font_size_control(const DialogState& dialog, const Tmc tmc) {
+    return (dialog.hid == kCxtRibbonIconBar && tmc == kTmcUserMin + 1) ||
+           (dialog.hid == kIddCharacter && tmc == kTmcCharacterSize);
+}
+
+void refresh_font_control_value(DialogState& dialog, const Tmc raw_tmc,
+                                ControlState& state,
+                                const bool read_native_text) {
+    const Tmc tmc = static_cast<Tmc>(raw_tmc & ~0x8000u);
+    if (read_native_text && state.window != nullptr &&
+        IsWindow(state.window)) {
+        HWND text_window = state.window;
+        if (window_is_class(state.window, "COMBOBOX")) {
+            COMBOBOXINFO info{};
+            info.cbSize = sizeof(info);
+            if (GetComboBoxInfo(state.window, &info) &&
+                info.hwndItem != nullptr) {
+                text_window = info.hwndItem;
+            }
+        }
+        const int wide_length = GetWindowTextLengthW(text_window);
+        std::vector<wchar_t> wide_text(
+            static_cast<std::size_t>(wide_length) + 1);
+        GetWindowTextW(text_window, wide_text.data(),
+                       static_cast<int>(wide_text.size()));
+        const int byte_count = WideCharToMultiByte(
+            CP_ACP, 0, wide_text.data(), -1, nullptr, 0, nullptr, nullptr);
+        if (byte_count > 0) {
+            std::vector<char> text(static_cast<std::size_t>(byte_count));
+            WideCharToMultiByte(CP_ACP, 0, wide_text.data(), -1, text.data(),
+                                byte_count, nullptr, nullptr);
+            state.text = text.data();
+        } else {
+            state.text.clear();
+        }
+    }
+
+    if (is_font_name_control(dialog, tmc) &&
+        g_font_name_to_value != nullptr && !state.text.empty()) {
+        state.value =
+            static_cast<Word>(g_font_name_to_value(state.text.c_str()));
+    } else if (is_font_size_control(dialog, tmc) &&
+               g_font_size_to_value != nullptr && !state.text.empty()) {
+        state.value =
+            static_cast<Word>(g_font_size_to_value(state.text.c_str()));
+    }
+}
+
+int CALLBACK collect_system_font(const LOGFONTA* logical_font,
+                                 const TEXTMETRICA*, DWORD, LPARAM parameter) {
+    if (logical_font == nullptr || logical_font->lfFaceName[0] == '\0' ||
+        logical_font->lfFaceName[0] == '@') {
+        return 1;
+    }
+    auto* fonts = reinterpret_cast<std::vector<std::string>*>(parameter);
+    fonts->emplace_back(logical_font->lfFaceName);
+    return 1;
+}
+
+std::vector<std::string> installed_windows_fonts() {
+    std::vector<std::string> fonts;
+    const HDC dc = GetDC(nullptr);
+    if (dc != nullptr) {
+        LOGFONTA logical_font{};
+        logical_font.lfCharSet = DEFAULT_CHARSET;
+        EnumFontFamiliesExA(dc, &logical_font,
+                            reinterpret_cast<FONTENUMPROCA>(collect_system_font),
+                            reinterpret_cast<LPARAM>(&fonts), 0);
+        ReleaseDC(nullptr, dc);
+    }
+    std::sort(fonts.begin(), fonts.end(),
+              [](const std::string& left, const std::string& right) {
+                  return _stricmp(left.c_str(), right.c_str()) < 0;
+              });
+    fonts.erase(std::unique(fonts.begin(), fonts.end(),
+                            [](const std::string& left,
+                               const std::string& right) {
+                                return _stricmp(left.c_str(), right.c_str()) == 0;
+                            }),
+                fonts.end());
+    return fonts;
+}
+
+void replace_list_entries(DialogState& dialog, const Tmc tmc,
+                          const std::vector<std::string>& entries) {
+    auto& state = dialog.controls[tmc];
+    if (state.window != nullptr && IsWindow(state.window)) {
+        const int length = GetWindowTextLengthA(state.window);
+        std::vector<char> buffer(static_cast<std::size_t>(length) + 1);
+        GetWindowTextA(state.window, buffer.data(),
+                       static_cast<int>(buffer.size()));
+        state.text = buffer.data();
+    }
+    const std::string edit_text = state.text;
+    state.entries = entries;
+    reset_native_list(state);
+    for (const auto& entry : state.entries) {
+        add_entry_to_native_control(state, entry);
+    }
+    state.text = edit_text;
+    if (state.window != nullptr && IsWindow(state.window)) {
+        SetWindowTextA(state.window, state.text.c_str());
+    }
+}
+
+bool populate_windows_font_control(DialogState& dialog, const Tmc tmc) {
+    if (is_font_name_control(dialog, tmc)) {
+        replace_list_entries(dialog, tmc, installed_windows_fonts());
+        return !dialog.controls[tmc].entries.empty();
+    }
+    if (is_font_size_control(dialog, tmc)) {
+        static const std::vector<std::string> sizes = {
+            "8",  "9",  "10", "11", "12", "14", "16", "18",
+            "20", "22", "24", "26", "28", "36", "48", "72"};
+        replace_list_entries(dialog, tmc, sizes);
+        return true;
+    }
+    return false;
+}
+
+struct OriginalListBinding {
+    OriginalListProc proc = nullptr;
+    Word parameter = 0;
+};
+
+OriginalListBinding original_list_binding(const DialogState& dialog,
+                                          const Tmc raw_tmc) {
+    const Tmc tmc = static_cast<Tmc>(raw_tmc & ~0x8000u);
+    if (dialog.hid == kCxtRibbonIconBar) {
+        if (tmc == kTmcUserMin) {
+            return {g_list_font_name, 0};
+        }
+        if (tmc == kTmcUserMin + 1) {
+            return {g_list_font_size, kTmcUserMin};
+        }
+    } else if (dialog.hid == kCxtRulerIconBar && tmc == kTmcUserMin) {
+        return {g_list_styles, 0};
+    } else if (dialog.hid == kIddCharacter) {
+        if (tmc == kTmcCharacterName) {
+            return {g_list_font_name, 0};
+        }
+        if (tmc == kTmcCharacterSize) {
+            return {g_list_font_size, kTmcCharacterName};
+        }
+        if (tmc == kTmcCharacterColor) {
+            return {g_list_character_color, 0};
+        }
+    } else if (dialog.hid == kIddApplyStyle && tmc == kTmcApplyStyle) {
+        return {g_list_styles, 0};
+    } else if (dialog.hid == kIddDefineStyle &&
+               (tmc == kTmcDefineStyle || tmc == kTmcDefineBasedOn ||
+                tmc == kTmcDefineNext)) {
+        return {g_list_styles, 0};
+    }
+    return {};
+}
+
+bool populate_original_list(DialogState& dialog, const Tmc raw_tmc) {
+    const Tmc tmc = static_cast<Tmc>(raw_tmc & ~0x8000u);
+    if (populate_windows_font_control(dialog, tmc)) {
+        return true;
+    }
+    const auto binding = original_list_binding(dialog, tmc);
+    if (binding.proc == nullptr) {
+        return false;
+    }
+
+    auto& state = dialog.controls[tmc];
+    if (state.window != nullptr && IsWindow(state.window)) {
+        const int length = GetWindowTextLengthA(state.window);
+        std::vector<char> text_buffer(static_cast<std::size_t>(length) + 1);
+        GetWindowTextA(state.window, text_buffer.data(),
+                       static_cast<int>(text_buffer.size()));
+        state.text = text_buffer.data();
+    }
+    const std::string edit_text = state.text;
+    state.entries.clear();
+    reset_native_list(state);
+
+    const Hdlg previous_current = g_current_dialog;
+    g_current_dialog = dialog.handle;
+    sync_current_dialog_globals();
+
+    char buffer[512] = {};
+    const Word reported_count =
+        binding.proc(kTmmCount, buffer, 0, 0, tmc, binding.parameter);
+    const unsigned limit = reported_count == kUnknownListCount
+                               ? 4096u
+                               : static_cast<unsigned>(reported_count);
+    for (unsigned index = 0; index < limit; ++index) {
+        buffer[0] = '\0';
+        if (binding.proc(kTmmText, buffer, static_cast<int>(index), 0, tmc,
+                         binding.parameter) == 0) {
+            break;
+        }
+        state.entries.emplace_back(buffer);
+        add_entry_to_native_control(state, state.entries.back());
+    }
+
+    g_current_dialog = previous_current;
+    sync_current_dialog_globals();
+    state.text = edit_text;
+    if (state.window != nullptr && IsWindow(state.window)) {
+        SetWindowTextA(state.window, state.text.c_str());
+    }
+    return !state.entries.empty();
+}
+
+void read_style_cab(DialogState& dialog, const Tmc tmc) {
+    char style_name[256] = {};
+    if (dialog.cab != nullptr) {
+        /* Pointer arguments begin at iag 1 in the native, aligned CAB layout
+           used by CABAPPLYSTYLE and CABDEFINESTYLE. */
+        GetCabSz(dialog.cab, style_name,
+                 static_cast<Word>(sizeof(style_name)), 1);
+    }
+    auto& state = dialog.controls[tmc];
+    state.text = style_name;
+    if (state.window != nullptr) {
+        SetWindowTextA(state.window, state.text.c_str());
+    }
+}
+
+void sync_style_cab(DialogState& dialog, const Tmc tmc) {
+    auto found = dialog.controls.find(tmc);
+    if (found == dialog.controls.end()) {
+        return;
+    }
+    auto& state = found->second;
+    if (state.window != nullptr && IsWindow(state.window)) {
+        const int length = GetWindowTextLengthA(state.window);
+        std::vector<char> buffer(static_cast<std::size_t>(length) + 1);
+        GetWindowTextA(state.window, buffer.data(),
+                       static_cast<int>(buffer.size()));
+        state.text = buffer.data();
+    }
+    if (dialog.cab != nullptr) {
+        FSetCabSz(dialog.cab, state.text.c_str(), 1);
+    }
+}
+
+struct CabCharacterNative {
+    Word simple_words;
+    Word handle_words;
+    Word sab;
+    Word alignment;
+    int ftc;
+    int hps;
+    int color;
+    int bold;
+    int italic;
+    int small_caps;
+    int hidden;
+    int underline;
+    int word_underline;
+    int double_underline;
+    int position;
+    int position_amount;
+    int spacing;
+    int spacing_amount;
+};
+
+CabCharacterNative* character_cab(DialogState& dialog) {
+    if (dialog.cab == nullptr || *dialog.cab == nullptr ||
+        OpusCbOfH(dialog.cab) < sizeof(CabCharacterNative)) {
+        return nullptr;
+    }
+    return static_cast<CabCharacterNative*>(*dialog.cab);
+}
+
+void set_native_check(DialogState& dialog, const Tmc tmc, const int value) {
+    auto& state = dialog.controls[tmc];
+    state.value = static_cast<Word>(value);
+    if (state.window != nullptr) {
+        SendMessageA(state.window, BM_SETCHECK,
+                     value != 0 ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+}
+
+void read_character_cab(DialogState& dialog) {
+    auto* cab = character_cab(dialog);
+    if (cab == nullptr) {
+        return;
+    }
+    char font_name[LF_FACESIZE] = {};
+    if (g_font_name_from_value != nullptr) {
+        g_font_name_from_value(cab->ftc, font_name,
+                               static_cast<int>(sizeof(font_name)));
+    }
+    auto& font = dialog.controls[kTmcCharacterName];
+    font.text = font_name;
+    font.value = static_cast<Word>(cab->ftc);
+    if (font.window != nullptr) {
+        SetWindowTextA(font.window, font.text.c_str());
+    }
+
+    char size_text[32] = {};
+    if (cab->hps >= 0 && cab->hps != 0x8001) {
+        if ((cab->hps & 1) == 0) {
+            std::snprintf(size_text, sizeof(size_text), "%d", cab->hps / 2);
+        } else {
+            std::snprintf(size_text, sizeof(size_text), "%d.5", cab->hps / 2);
+        }
+    }
+    auto& size = dialog.controls[kTmcCharacterSize];
+    size.text = size_text;
+    size.value = static_cast<Word>(cab->hps);
+    if (size.window != nullptr) {
+        SetWindowTextA(size.window, size.text.c_str());
+    }
+
+    if (cab->color >= 0 &&
+        static_cast<std::size_t>(cab->color) <
+            dialog.controls[kTmcCharacterColor].entries.size()) {
+        SendMessageA(dialog.controls[kTmcCharacterColor].window, CB_SETCURSEL,
+                     cab->color, 0);
+        dialog.controls[kTmcCharacterColor].value =
+            static_cast<Word>(cab->color);
+    }
+    set_native_check(dialog, kTmcUserMin + 5, cab->bold);
+    set_native_check(dialog, kTmcUserMin + 6, cab->italic);
+    set_native_check(dialog, kTmcUserMin + 7, cab->small_caps);
+    set_native_check(dialog, kTmcUserMin + 8, cab->hidden);
+    set_native_check(dialog, kTmcUserMin + 9, cab->underline);
+    set_native_check(dialog, kTmcUserMin + 10, cab->word_underline);
+    set_native_check(dialog, kTmcUserMin + 11, cab->double_underline);
+    const int position = cab->position >= 0 && cab->position <= 2
+                             ? cab->position
+                             : 0;
+    set_native_check(dialog, static_cast<Tmc>(kTmcUserMin + 13 + position), 1);
+    const int spacing = cab->spacing >= 0 && cab->spacing <= 2
+                            ? cab->spacing
+                            : 0;
+    set_native_check(dialog, static_cast<Tmc>(kTmcUserMin + 18 + spacing), 1);
+}
+
+void sync_character_cab(DialogState& dialog) {
+    auto* cab = character_cab(dialog);
+    if (cab == nullptr) {
+        return;
+    }
+    const auto read_text = [&dialog](const Tmc tmc) {
+        auto& state = dialog.controls[tmc];
+        if (state.window != nullptr) {
+            const int length = GetWindowTextLengthA(state.window);
+            std::vector<char> buffer(static_cast<std::size_t>(length) + 1);
+            GetWindowTextA(state.window, buffer.data(),
+                           static_cast<int>(buffer.size()));
+            state.text = buffer.data();
+        }
+        return state.text;
+    };
+    if (g_font_name_to_value != nullptr) {
+        const int ftc =
+            g_font_name_to_value(read_text(kTmcCharacterName).c_str());
+        if (ftc >= 0) {
+            cab->ftc = ftc;
+        }
+    }
+    if (g_font_size_to_value != nullptr) {
+        const int hps =
+            g_font_size_to_value(read_text(kTmcCharacterSize).c_str());
+        if (hps >= 0) {
+            cab->hps = hps;
+        }
+    }
+    const LRESULT color = SendMessageA(
+        dialog.controls[kTmcCharacterColor].window, CB_GETCURSEL, 0, 0);
+    if (color != CB_ERR) {
+        cab->color = static_cast<int>(color);
+    }
+    const auto checked = [&dialog](const Tmc tmc) {
+        return SendMessageA(dialog.controls[tmc].window, BM_GETCHECK, 0, 0) ==
+               BST_CHECKED;
+    };
+    cab->bold = checked(kTmcUserMin + 5);
+    cab->italic = checked(kTmcUserMin + 6);
+    cab->small_caps = checked(kTmcUserMin + 7);
+    cab->hidden = checked(kTmcUserMin + 8);
+    cab->underline = checked(kTmcUserMin + 9);
+    cab->word_underline = checked(kTmcUserMin + 10);
+    cab->double_underline = checked(kTmcUserMin + 11);
+    for (int index = 0; index < 3; ++index) {
+        if (checked(static_cast<Tmc>(kTmcUserMin + 13 + index))) {
+            cab->position = index;
+        }
+        if (checked(static_cast<Tmc>(kTmcUserMin + 18 + index))) {
+            cab->spacing = index;
+        }
+    }
+}
+
+void materialize_character_template(DialogState& dialog) {
+    if (dialog.hid != kIddCharacter || dialog.window == nullptr) {
+        return;
+    }
+    constexpr DWORD combo_style =
+        WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN | CBS_AUTOHSCROLL;
+    create_static_text(dialog, "Character", {4, 4, 44, 9});
+    create_static_text(dialog, "&Font:", {4, 14, 35, 9});
+    create_native_control(dialog, kTmcCharacterName, "COMBOBOX", "",
+                          {4, 24, 80, 68}, combo_style);
+    create_static_text(dialog, "&Points:", {88, 14, 35, 9});
+    create_native_control(dialog, kTmcCharacterSize, "COMBOBOX", "",
+                          {88, 24, 40, 68}, combo_style);
+    create_static_text(dialog, "Co&lor:", {4, 38, 35, 9});
+    create_native_control(dialog, kTmcCharacterColor, "COMBOBOX", "",
+                          {4, 48, 44, 72},
+                          WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST);
+
+    const struct {
+        Tmc tmc;
+        const char* caption;
+        Rec rec;
+    } checks[] = {
+        {kTmcUserMin + 5, "&Bold", {5, 63, 26, 12}},
+        {kTmcUserMin + 6, "&Italic", {5, 75, 34, 12}},
+        {kTmcUserMin + 7, "Small &Caps", {5, 87, 50, 12}},
+        {kTmcUserMin + 8, "&Hidden", {5, 99, 34, 12}},
+        {kTmcUserMin + 9, "&Underline", {5, 111, 46, 12}},
+        {kTmcUserMin + 10, "&Word underline", {5, 123, 66, 12}},
+        {kTmcUserMin + 11, "&Double underline", {5, 135, 74, 12}},
+    };
+    for (const auto& check : checks) {
+        create_native_control(dialog, check.tmc, "BUTTON", check.caption,
+                              check.rec, WS_TABSTOP | BS_AUTOCHECKBOX);
+    }
+
+    create_untracked_control(dialog, "BUTTON", "Position", {84, 44, 89, 48},
+                             BS_GROUPBOX);
+    create_native_control(dialog, kTmcUserMin + 13, "BUTTON", "&Normal",
+                          {87, 54, 45, 12},
+                          WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON);
+    create_native_control(dialog, kTmcUserMin + 14, "BUTTON", "&Superscript",
+                          {87, 65, 54, 12},
+                          WS_TABSTOP | BS_AUTORADIOBUTTON);
+    create_native_control(dialog, kTmcUserMin + 15, "BUTTON", "Subsc&ript",
+                          {87, 76, 50, 12},
+                          WS_TABSTOP | BS_AUTORADIOBUTTON);
+    create_static_text(dialog, "B&y:", {141, 67, 13, 9});
+    create_native_control(dialog, kTmcUserMin + 16, "EDIT", "",
+                          {141, 77, 30, 12},
+                          WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL);
+
+    create_untracked_control(dialog, "BUTTON", "Character Spacing",
+                             {84, 96, 89, 49}, BS_GROUPBOX);
+    create_native_control(dialog, kTmcUserMin + 18, "BUTTON", "N&ormal",
+                          {87, 107, 45, 12},
+                          WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON);
+    create_native_control(dialog, kTmcUserMin + 19, "BUTTON", "&Expanded",
+                          {87, 119, 46, 12},
+                          WS_TABSTOP | BS_AUTORADIOBUTTON);
+    create_native_control(dialog, kTmcUserMin + 20, "BUTTON", "&Condensed",
+                          {87, 130, 50, 12},
+                          WS_TABSTOP | BS_AUTORADIOBUTTON);
+    create_static_text(dialog, "By&:", {141, 120, 12, 9});
+    create_native_control(dialog, kTmcUserMin + 21, "EDIT", "",
+                          {141, 130, 30, 12},
+                          WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL);
+    create_native_control(dialog, kTmcOk, "BUTTON", "OK", {140, 6, 34, 14},
+                          WS_TABSTOP | BS_DEFPUSHBUTTON);
+    create_native_control(dialog, kTmcCancel, "BUTTON", "Cancel",
+                          {140, 23, 34, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    dialog.caption = "Character";
+    dialog.native_modal = true;
+    populate_original_list(dialog, kTmcCharacterName);
+    populate_original_list(dialog, kTmcCharacterSize);
+    populate_original_list(dialog, kTmcCharacterColor);
+    read_character_cab(dialog);
+}
+
+void materialize_apply_style_template(DialogState& dialog) {
+    if (dialog.hid != kIddApplyStyle || dialog.window == nullptr) {
+        return;
+    }
+    create_static_text(dialog, "&Style Name:", {4, 3, 55, 9});
+    create_native_control(dialog, kTmcApplyStyle, "COMBOBOX", "",
+                          {4, 13, 96, 60},
+                          WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN |
+                              CBS_AUTOHSCROLL);
+    create_native_control(dialog, kTmcOk, "BUTTON", "OK", {104, 6, 40, 14},
+                          WS_TABSTOP | BS_DEFPUSHBUTTON);
+    create_native_control(dialog, kTmcCancel, "BUTTON", "Cancel",
+                          {104, 23, 40, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcApplyDefine, "BUTTON", "&Define...",
+                          {103, 39, 42, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcApplyBanter, "STATIC", "",
+                          {4, 75, 141, 24}, SS_LEFT);
+    dialog.caption = "Apply Style";
+    dialog.native_modal = true;
+    read_style_cab(dialog, kTmcApplyStyle);
+    populate_original_list(dialog, kTmcApplyStyle);
+}
+
+void materialize_define_style_template(DialogState& dialog) {
+    if (dialog.hid != kIddDefineStyle || dialog.window == nullptr) {
+        return;
+    }
+    create_static_text(dialog, "Define &Style Name:", {4, 3, 78, 10});
+    create_native_control(dialog, kTmcDefineStyle, "COMBOBOX", "",
+                          {4, 14, 76, 60},
+                          WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN |
+                              CBS_AUTOHSCROLL);
+    create_native_control(dialog, kTmcDefineChars, "BUTTON", "&Character...",
+                          {85, 14, 52, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcDefineParas, "BUTTON", "&Paragraph...",
+                          {85, 30, 52, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcDefineTabs, "BUTTON", "&Tabs...",
+                          {85, 46, 52, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcDefinePosition, "BUTTON", "Pos&ition...",
+                          {85, 62, 52, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcOk, "BUTTON", "OK", {140, 14, 45, 14},
+                          WS_TABSTOP | BS_DEFPUSHBUTTON);
+    create_native_control(dialog, kTmcCancel, "BUTTON", "Cancel",
+                          {140, 30, 45, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcDefineOptions, "BUTTON", "&Options >>",
+                          {140, 62, 45, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcDefineBanter, "STATIC", "",
+                          {4, 76, 180, 24}, SS_LEFT);
+    create_native_control(dialog, kTmcDefineCommit, "BUTTON", "&Define",
+                          {4, 129, 43, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcDefineDelete, "BUTTON", "De&lete",
+                          {49, 129, 43, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcDefineRename, "BUTTON", "&Rename...",
+                          {94, 129, 43, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcDefineMerge, "BUTTON", "&Merge...",
+                          {139, 129, 43, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    dialog.caption = "Define Style";
+    dialog.native_modal = true;
+    read_style_cab(dialog, kTmcDefineStyle);
+    populate_original_list(dialog, kTmcDefineStyle);
+}
+
 void materialize_icon_bar_template(DialogState& dialog) {
-    constexpr Word cxtRibbonIconBar = 0x8005;
-    constexpr Word cxtRulerIconBar = 0x8006;
-    constexpr Tmc tmcUserMin = 0x0400;
     constexpr DWORD combo_style =
         WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN | CBS_AUTOHSCROLL;
 
-    if (dialog.hid == cxtRibbonIconBar) {
+    if (dialog.hid == kCxtRibbonIconBar) {
         const bool win3 = (*dialog.template_handle)->rec.dx == 160;
         if (win3) {
             create_static_text(dialog, "Font:", {4, 3, 20, 8});
-            create_native_control(dialog, tmcUserMin, "COMBOBOX", "",
+            create_native_control(dialog, kTmcUserMin, "COMBOBOX", "",
                                   {26, 1, 76, 67}, combo_style);
             create_static_text(dialog, "Pts:", {108, 3, 14, 8});
-            create_native_control(dialog, tmcUserMin + 1, "COMBOBOX", "",
+            create_native_control(dialog, kTmcUserMin + 1, "COMBOBOX", "",
                                   {127, 1, 28, 67}, combo_style);
         } else {
             create_static_text(dialog, "Font:", {4, 3, 20, 8});
-            create_native_control(dialog, tmcUserMin, "COMBOBOX", "",
+            create_native_control(dialog, kTmcUserMin, "COMBOBOX", "",
                                   {29, 1, 80, 68}, combo_style);
             create_static_text(dialog, "Pts:", {115, 3, 16, 8});
-            create_native_control(dialog, tmcUserMin + 1, "COMBOBOX", "",
+            create_native_control(dialog, kTmcUserMin + 1, "COMBOBOX", "",
                                   {134, 1, 32, 68}, combo_style);
         }
-    } else if (dialog.hid == cxtRulerIconBar) {
+    } else if (dialog.hid == kCxtRulerIconBar) {
         const bool win3 = (*dialog.template_handle)->rec.dx == 102;
         if (win3) {
             create_static_text(dialog, "Style:", {4, 3, 20, 8});
-            create_native_control(dialog, tmcUserMin, "COMBOBOX", "",
+            create_native_control(dialog, kTmcUserMin, "COMBOBOX", "",
                                   {26, 1, 76, 68}, combo_style);
         } else {
             create_static_text(dialog, "Style:", {4, 3, 24, 8});
-            create_native_control(dialog, tmcUserMin, "COMBOBOX", "",
+            create_native_control(dialog, kTmcUserMin, "COMBOBOX", "",
                                   {29, 1, 80, 68}, combo_style);
         }
+    }
+    if (dialog.hid == kCxtRibbonIconBar) {
+        populate_original_list(dialog, kTmcUserMin);
+        populate_original_list(dialog, kTmcUserMin + 1);
     }
 }
 
@@ -786,22 +1418,64 @@ bool invoke_dialog_proc(DialogState& dialog, const Word message,
     return proc(message, tmc, new_value, old_value, parameter) != 0;
 }
 
+void ensure_icon_bar_commands_active(DialogState& dialog, const Tmc tmc) {
+    if (dialog.hid != kCxtRibbonIconBar || dialog.commands_active) {
+        return;
+    }
+    dialog.commands_active = true;
+    invoke_dialog_proc(dialog, kDlmSetDialogFocus, tmc);
+    invoke_dialog_proc(dialog, kDlmSetItemFocus, tmc);
+}
+
+void commit_ribbon_list_selection(DialogState& dialog, const Tmc tmc) {
+    if (dialog.hid != kCxtRibbonIconBar || !dialog.commands_active) {
+        return;
+    }
+    /* The Win16 SDM/icon-bar loop applied a combo selection when its dialog
+       focus was terminated.  A native Win32 drop-down keeps focus on the
+       combo after the list closes, so that termination never reliably
+       occurs.  CBN_SELENDOK identifies the completed choice, after all
+       intermediate CBN_SELCHANGE notifications, and is the safe point to
+       send the same original callbacks.  Typed edit text still commits on
+       CBN_KILLFOCUS. */
+    OpusX64TraceRibbon("commit-begin", kDlmKillDialogFocus, tmc,
+                       dialog.controls[tmc].value, dialog.commands_active,
+                       0, 0, 0);
+    const bool item_result =
+        invoke_dialog_proc(dialog, kDlmKillItemFocus, tmc);
+    const bool dialog_result =
+        invoke_dialog_proc(dialog, kDlmKillDialogFocus, tmc);
+    dialog.commands_active = false;
+    /* Win16 SDM returned focus to the document when an icon-bar session
+       ended.  A native combo otherwise retains focus, forcing the user to
+       click the document; that mouse click reloads the properties at the
+       caret and discards the just-applied insertion font and size.  Route
+       the focus return through Microsoft's original FDlgIb handler. */
+    const bool focus_result =
+        invoke_dialog_proc(dialog, kDlmDialogClick, tmc);
+    OpusX64TraceRibbon("commit-end", kDlmKillDialogFocus, tmc,
+                       item_result, dialog_result, focus_result, 0, 0);
+}
+
 std::string selected_list_text(const ControlState& control_state) {
     if (control_state.window == nullptr) {
         return {};
     }
-    const LRESULT selection =
-        SendMessageA(control_state.window, LB_GETCURSEL, 0, 0);
-    if (selection == LB_ERR) {
+    const bool combo = window_is_class(control_state.window, "COMBOBOX");
+    const LRESULT selection = SendMessageA(
+        control_state.window, combo ? CB_GETCURSEL : LB_GETCURSEL, 0, 0);
+    if (selection == (combo ? CB_ERR : LB_ERR)) {
         return {};
     }
-    const LRESULT length =
-        SendMessageA(control_state.window, LB_GETTEXTLEN, selection, 0);
-    if (length == LB_ERR) {
+    const LRESULT length = SendMessageA(
+        control_state.window, combo ? CB_GETLBTEXTLEN : LB_GETTEXTLEN,
+        selection, 0);
+    if (length == (combo ? CB_ERR : LB_ERR)) {
         return {};
     }
     std::vector<char> text(static_cast<std::size_t>(length) + 1);
-    SendMessageA(control_state.window, LB_GETTEXT, selection,
+    SendMessageA(control_state.window, combo ? CB_GETLBTEXT : LB_GETTEXT,
+                 selection,
                  reinterpret_cast<LPARAM>(text.data()));
     return text.data();
 }
@@ -874,6 +1548,12 @@ void finish_native_dialog(DialogState& dialog, const Tmc result) {
         sync_open_cab(dialog);
     } else if (dialog.hid == kIddNewDoc) {
         sync_new_cab(dialog);
+    } else if (dialog.hid == kIddApplyStyle) {
+        sync_style_cab(dialog, kTmcApplyStyle);
+    } else if (dialog.hid == kIddDefineStyle) {
+        sync_style_cab(dialog, kTmcDefineStyle);
+    } else if (dialog.hid == kIddCharacter) {
+        sync_character_cab(dialog);
     }
     if (!invoke_dialog_proc(dialog, kDlmTerm, result)) {
         return;
@@ -915,13 +1595,76 @@ void handle_dialog_command(const Hdlg handle, const WPARAM w_param,
             found->second.text = text.data();
         }
     }
-    if (!dialog->commands_active) {
-        return;
-    }
-
     g_current_dialog = handle;
     g_focus_dialog = handle;
     sync_current_dialog_globals();
+
+    if (found != dialog->controls.end() &&
+        window_is_class(found->second.window, "COMBOBOX")) {
+        OpusX64TraceRibbon("combo", notification, tmc,
+                           found->second.value, dialog->commands_active,
+                           0, 0, 0);
+        if (notification == CBN_SETFOCUS) {
+            if (!dialog->commands_active) {
+                dialog->commands_active = true;
+                invoke_dialog_proc(*dialog, kDlmSetDialogFocus, tmc);
+            }
+            invoke_dialog_proc(*dialog, kDlmSetItemFocus, tmc);
+            return;
+        }
+        if (notification == CBN_KILLFOCUS) {
+            if (dialog->commands_active) {
+                invoke_dialog_proc(*dialog, kDlmKillItemFocus, tmc);
+                invoke_dialog_proc(*dialog, kDlmKillDialogFocus, tmc);
+                dialog->commands_active = false;
+            }
+            return;
+        }
+        if (notification == CBN_DROPDOWN) {
+            populate_original_list(*dialog, tmc);
+            return;
+        }
+        if (notification == CBN_EDITCHANGE) {
+            ensure_icon_bar_commands_active(*dialog, tmc);
+            refresh_font_control_value(*dialog, tmc, found->second, true);
+            OpusX64TraceRibbon("combo-edit", notification, tmc,
+                               found->second.value,
+                               dialog->commands_active, 0, 0, 0);
+            invoke_dialog_proc(*dialog, kDlmChange, tmc);
+            return;
+        }
+        if (notification == CBN_SELCHANGE) {
+            ensure_icon_bar_commands_active(*dialog, tmc);
+            const LRESULT selection =
+                SendMessageA(found->second.window, CB_GETCURSEL, 0, 0);
+            if (selection != CB_ERR) {
+                dialog->controls[static_cast<Tmc>(tmc + 1)].value =
+                    static_cast<Word>(selection);
+                found->second.value = static_cast<Word>(selection);
+                found->second.text = selected_list_text(found->second);
+                refresh_font_control_value(*dialog, tmc, found->second,
+                                           false);
+                OpusX64TraceRibbon("combo-select", notification, tmc,
+                                   found->second.value,
+                                   static_cast<int>(selection), 0, 0, 0);
+                SetWindowTextA(found->second.window,
+                               found->second.text.c_str());
+                invoke_dialog_proc(*dialog, kDlmClick,
+                                   static_cast<Tmc>(tmc + 1));
+                invoke_dialog_proc(*dialog, kDlmChange, tmc);
+            }
+            return;
+        }
+        if (notification == CBN_SELENDOK) {
+            ensure_icon_bar_commands_active(*dialog, tmc);
+            PostMessageW(dialog->window, kWmCommitRibbonSelection, tmc, 0);
+            return;
+        }
+    }
+
+    if (!dialog->commands_active) {
+        return;
+    }
 
     if (dialog->hid == kIddNewDoc && tmc == kTmcNewType &&
         notification == EN_CHANGE) {
@@ -1000,6 +1743,17 @@ LRESULT CALLBACK native_dialog_window_proc(const HWND window,
         case WM_COMMAND:
             handle_dialog_command(handle, w_param, l_param);
             return 0;
+        case kWmCommitRibbonSelection:
+            if (auto* dialog = find_dialog(handle); dialog != nullptr) {
+                g_current_dialog = handle;
+                g_focus_dialog = handle;
+                sync_current_dialog_globals();
+                ensure_icon_bar_commands_active(
+                    *dialog, static_cast<Tmc>(w_param));
+                commit_ribbon_list_selection(
+                    *dialog, static_cast<Tmc>(w_param));
+            }
+            return 0;
         case WM_CLOSE:
             if (auto* dialog = find_dialog(handle); dialog != nullptr) {
                 finish_native_dialog(*dialog, kTmcCancel);
@@ -1027,6 +1781,20 @@ HWND vhWndMsgBoxParent = nullptr;
 
 extern void** hcabDlgCur;
 extern std::uintptr_t wRefDlgCur;
+
+void OpusRegisterOriginalDialogCallbacks(
+    OriginalListProc list_font_name, OriginalListProc list_font_size,
+    OriginalListProc list_styles, OriginalListProc list_character_color,
+    FontValueProc font_name_to_value, FontValueProc font_size_to_value,
+    FontNameFromValueProc font_name_from_value) {
+    g_list_font_name = list_font_name;
+    g_list_font_size = list_font_size;
+    g_list_styles = list_styles;
+    g_list_character_color = list_character_color;
+    g_font_name_to_value = font_name_to_value;
+    g_font_size_to_value = font_size_to_value;
+    g_font_name_from_value = font_name_from_value;
+}
 
 int FInitSdm_sdm21(void*) {
     g_initialized = true;
@@ -1100,6 +1868,9 @@ Hdlg HdlgStartDlg(DltHeader** dialog_template, Hcab cab, Dli* initializer) {
     materialize_icon_bar_template(g_dialogs.at(handle));
     materialize_new_template(g_dialogs.at(handle));
     materialize_open_template(g_dialogs.at(handle));
+    materialize_character_template(g_dialogs.at(handle));
+    materialize_apply_style_template(g_dialogs.at(handle));
+    materialize_define_style_template(g_dialogs.at(handle));
     return handle;
 }
 
@@ -1304,8 +2075,13 @@ void SetTmcVal_sdm21(Tmc tmc, Word value) {
     }
 }
 Word ValGetTmc(Tmc tmc) {
-    const auto* state = find_control(tmc);
-    return state == nullptr ? 0 : state->value;
+    const Tmc value_tmc = static_cast<Tmc>(tmc & ~0x8000u);
+    const auto found = g_dialog.controls.find(value_tmc);
+    if (found == g_dialog.controls.end()) {
+        return 0;
+    }
+    refresh_font_control_value(g_dialog, value_tmc, found->second, true);
+    return found->second.value;
 }
 
 void SetTmcText_sdm21(Tmc tmc, char* text) {
@@ -1317,6 +2093,7 @@ void SetTmcText_sdm21(Tmc tmc, char* text) {
     if (state.window != nullptr && IsWindow(state.window)) {
         SetWindowTextA(state.window, state.text.c_str());
     }
+    refresh_font_control_value(g_dialog, tmc, state, false);
 }
 void GetTmcText_sdm21(Tmc tmc, char* destination, Word capacity) {
     const auto* state = find_control(tmc);
@@ -1382,7 +2159,7 @@ Word TmvGetTmc(Tmc tmc) {
     const auto* state = find_control(tmc);
     return state != nullptr && !state->text.empty() ? 3 : 1;
 }
-void RedisplayTmc(Tmc) {}
+void RedisplayTmc(Tmc tmc) { populate_original_list(g_dialog, tmc); }
 
 void EnableTmc_sdm21(Tmc tmc, int enabled) {
     auto& state = control(tmc);
@@ -1421,10 +2198,7 @@ void CompleteComboTmc(Tmc) {}
 void AddListBoxEntry(Tmc tmc, char* entry) {
     auto& state = control(tmc);
     state.entries.emplace_back(counted_or_zero_terminated(entry));
-    if (state.window != nullptr && IsWindow(state.window)) {
-        SendMessageA(state.window, CB_ADDSTRING, 0,
-                     reinterpret_cast<LPARAM>(state.entries.back().c_str()));
-    }
+    add_entry_to_native_control(state, state.entries.back());
 }
 void InsertListBoxEntry(Tmc tmc, char* entry, Word index) {
     auto& state = control(tmc);
