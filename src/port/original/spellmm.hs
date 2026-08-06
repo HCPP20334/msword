@@ -13,17 +13,16 @@
 #define tmcSplMMIgnoreCaps (tmcUserMin + 9)
 #define tmcSplMMAutoSugg   (tmcUserMin + 10)
 
-#pragma pack(push, 2)
 typedef struct _CABSPELLERMM
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszSplMMChangeTo;
 	unsigned uSplMMSuggList;
 	int iSplMMAddToBox;
 	BOOL fSplMMIgnoreCaps;
 	BOOL fSplMMAutoSugg;
 } CABSPELLERMM;
-#pragma pack(pop)
 
 typedef CABSPELLERMM **HCABSPELLERMM;
 #define cabiCABSPELLERMM Cabi((sizeof(CABSPELLERMM) + sizeof(WORD) - 1) / sizeof(WORD), 1)

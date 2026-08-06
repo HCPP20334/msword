@@ -131,11 +131,15 @@ HWND			vhwndZoom = hNil;
 
 
 /* %%Function:MwdWndProcRare %%Owner:chic */
+#ifdef OPUS_X64
+LRESULT MwdWndProcRare(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+#else
 long MwdWndProcRare(hwnd, message, wParam, lParam)
 HWND hwnd;
 int message;
 WORD wParam;
 LONG lParam;
+#endif
 {
 
 	extern int mwCreate;
@@ -169,12 +173,21 @@ LONG lParam;
 			{
 			struct MWD *pmwd = PmwdMw(mw);
 
+#ifdef OPUS_X64
+			pmwd->xp = (short) LOWORD(lParam);
+			pmwd->yp = (short) HIWORD(lParam);
+#else
 			pmwd->xp = LOWORD(lParam);
 			pmwd->yp = HIWORD(lParam);
+#endif
 			/* the dimensions are recorded in the size message */
 
 			if (vfRecording && fRecordMove)
+#ifdef OPUS_X64
+				RecordDocMove((short) LOWORD(lParam), (short) HIWORD(lParam));
+#else
 				RecordDocMove(LOWORD(lParam), HIWORD(lParam));
+#endif
 			fRecordMove = fFalse;
 			}
 		break;
@@ -214,11 +227,16 @@ LONG lParam;
 
 
 /* %%Function:RareWwPaneWndProc %%Owner:chic */
+#ifdef OPUS_X64
+LRESULT RareWwPaneWndProc(HWND hwnd, UINT message, WPARAM wParam,
+                         LPARAM lParam)
+#else
 long RareWwPaneWndProc(hwnd, message, wParam, lParam)
 HWND hwnd;
 int message;
 WORD wParam;
 LONG lParam;
+#endif
 {
 	int ww;
 	struct WWD *pwwd;

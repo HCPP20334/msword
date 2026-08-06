@@ -1868,7 +1868,7 @@ struct RC *prc;
 	pdxp = &vfli.rgdxp[0];
 	ich = 0;
 	FreezeHp();
-	for (pchr = &(**vhgrpchr)[0]; ; (char *)pchr += chrm)
+	for (pchr = &(**vhgrpchr)[0]; ; (char *)pchr += CbFromChrm(chrm))
 		{
 		for (ichNext = pchr->ich; cpT < cpPic && ich < ichNext; ich++, cpT++)
 			xp += *pdxp++;

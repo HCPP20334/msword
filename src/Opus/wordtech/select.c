@@ -957,7 +957,7 @@ over xp, depending whichever is closer to the middle point of the char */
 			break;
 			}
 /* note how chrm is cb of the variant chr structure! */
-		(char *)pchr += chrm;
+		(char *)pchr += CbFromChrm(chrm);
 		}
 
 LHaveCp:

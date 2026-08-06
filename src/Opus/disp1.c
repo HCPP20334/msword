@@ -956,7 +956,7 @@ int		dxpToXw, ywLine;
 			ptPen.xp = xpNew;
 			ptPen.yp = ypNew;
 			fNoSkip = vfli.fPrint;
-			(char *) pchr += chrmFormula;
+			(char *) pchr += cbCHRF;
 			}
 		else  if (chrm == chrmFormatGroup)
 			{
@@ -971,7 +971,7 @@ int		dxpToXw, ywLine;
 				}
 			/* note that rcOpaque and rcErase will no
 				longer change (rcErase not used) */
-			(char *) pchr += chrmFormatGroup;
+			(char *) pchr += cbCHRFG;
 			}
 		else  /*if (chrm == chrmEnd)*/
 			
@@ -1718,8 +1718,8 @@ struct RC *prcwClip;
 
 		else  if (chrm == chrmEnd)
 			break;
-		bchrCur += chrm;
-		(char *)pchr += chrm;
+		bchrCur += CbFromChrm(chrm);
+		(char *)pchr += CbFromChrm(chrm);
 		}
 
 /* draw CRJ symbol if needed */

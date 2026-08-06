@@ -11,6 +11,7 @@
 typedef struct _CABINSBREAK
 {
 	CABH cabh;
+	WORD sab;
 	int iType;
 } CABINSBREAK;
 

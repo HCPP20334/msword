@@ -71,7 +71,7 @@ struct TestDli {
     int dx;
     int dy;
     std::uint32_t flags;
-    TestWord reference;
+    std::uintptr_t reference;
     unsigned char* runtime_items;
 };
 
@@ -83,8 +83,50 @@ extern "C" HWND HwndFromDlg(TestWord);
 extern "C" HWND HwndOfTmc(TestWord);
 extern "C" int FModalDlg(TestWord);
 extern "C" int FFreeDlg();
+extern "C" TestWord TmcDoDlgDli(TestDltHeader**, void**, TestDli*);
+extern "C" void EndDlg(TestWord);
 extern "C" void SetTmcText_sdm21(TestWord, char*);
 extern "C" void GetTmcText_sdm21(TestWord, char*, TestWord);
+
+int modal_init_count = 0;
+int modal_exit_count = 0;
+int new_modal_init_count = 0;
+int new_modal_exit_count = 0;
+bool new_modal_controls_present = false;
+
+bool WindowHasClass(const HWND window, const char* expected) {
+    char class_name[32] = {};
+    return window != nullptr &&
+           GetClassNameA(window, class_name, sizeof(class_name)) != 0 &&
+           std::strcmp(class_name, expected) == 0;
+}
+
+int ModalRuntimeProbe(TestWord message, TestWord, TestWord, TestWord,
+                      TestWord) {
+    if (message == 1) {
+        ++modal_init_count;
+        EndDlg(2);
+    } else if (message == 4) {
+        ++modal_exit_count;
+    }
+    return 1;
+}
+
+int NewModalRuntimeProbe(TestWord message, TestWord, TestWord, TestWord,
+                         TestWord) {
+    if (message == 1) {
+        ++new_modal_init_count;
+        new_modal_controls_present =
+            WindowHasClass(HwndOfTmc(0x0402), "Button") &&
+            WindowHasClass(HwndOfTmc(0x0403), "Button") &&
+            WindowHasClass(HwndOfTmc(0x0404), "Edit") &&
+            WindowHasClass(HwndOfTmc(0x0405), "ListBox");
+        EndDlg(2);
+    } else if (message == 4) {
+        ++new_modal_exit_count;
+    }
+    return 1;
+}
 
 int main() {
     std::array offsets{2, 8, 13, 3};
@@ -282,6 +324,30 @@ int main() {
         DestroyWindow(parent);
         EndSdm();
         return 23;
+    }
+    TestDltHeader modal_template{{8, 24, 206, 104}, 3, 0x8400,
+                                  reinterpret_cast<void*>(ModalRuntimeProbe),
+                                  11, 4};
+    auto* modal_template_pointer = &modal_template;
+    TestDli modal_initializer{parent, 0, 0, 1, 0, nullptr};
+    if (TmcDoDlgDli(&modal_template_pointer, nullptr, &modal_initializer) != 2 ||
+        modal_init_count != 1 || modal_exit_count != 1 ||
+        !IsWindow(second_host)) {
+        DestroyWindow(parent);
+        EndSdm();
+        return 24;
+    }
+    TestDltHeader new_modal_template{
+        {20, 24, 127, 114}, 2, 0x8404,
+        reinterpret_cast<void*>(NewModalRuntimeProbe), 9, 4};
+    auto* new_modal_template_pointer = &new_modal_template;
+    if (TmcDoDlgDli(&new_modal_template_pointer, nullptr,
+                    &modal_initializer) != 2 ||
+        new_modal_init_count != 1 || new_modal_exit_count != 1 ||
+        !new_modal_controls_present || !IsWindow(second_host)) {
+        DestroyWindow(parent);
+        EndSdm();
+        return 25;
     }
     EndSdm();
     DestroyWindow(parent);

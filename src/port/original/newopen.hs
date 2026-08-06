@@ -4,6 +4,7 @@
 typedef struct _CABNEWOPEN
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszFileName;
 } CABNEWOPEN;
 

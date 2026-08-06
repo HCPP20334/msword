@@ -8,7 +8,6 @@
 #define tmcIFldHelp      (tmcUserMin + 4)
 #define tmcIFldAdd       (tmcUserMin + 5)
 
-#pragma pack(push, 2)
 typedef struct _CABINSFIELD
 {
 	CABH cabh;
@@ -17,7 +16,6 @@ typedef struct _CABINSFIELD
 	unsigned uFlt;
 	unsigned uInst;
 } CABINSFIELD;
-#pragma pack(pop)
 
 typedef CABINSFIELD **HCABINSFIELD;
 #define cabiCABINSFIELD Cabi((sizeof(CABINSFIELD) + sizeof(WORD) - 1) / sizeof(WORD), 1)

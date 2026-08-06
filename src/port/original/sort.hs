@@ -11,7 +11,6 @@
 #define tmcSortCol       (tmcUserMin + 7)
 #define tmcSortCase      (tmcUserMin + 8)
 
-#pragma pack(push, 2)
 typedef struct _CABSORT
 {
 	CABH cabh;
@@ -23,7 +22,6 @@ typedef struct _CABSORT
 	BOOL fSortCol;
 	BOOL fCase;
 } CABSORT;
-#pragma pack(pop)
 
 typedef CABSORT **HCABSORT;
 #define cabiCABSORT Cabi((sizeof(CABSORT) + sizeof(WORD) - 1) / sizeof(WORD), 0)

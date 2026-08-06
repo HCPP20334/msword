@@ -2883,7 +2883,7 @@ LEndWord:
 				cpChr = cpT;
 				}
 			ichChr = pchr->ich;
-			*pbchrBreak += chrm;
+			*pbchrBreak += CbFromChrm(chrm);
 			}
 /* now ichLim is in the "break" run */
 		vfli.cpMac = cpChr + ichLim - ichChr;
@@ -3010,7 +3010,7 @@ else  if (chrm == chrmFormula)
 
 #endif
 if (chrm == chrmEnd) break;
-(char *)pchr += chrm;
+(char *)pchr += CbFromChrm(chrm);
 				}
 			if ((CP) ich >= dcp)
 				{

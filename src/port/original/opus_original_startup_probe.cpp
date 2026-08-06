@@ -321,6 +321,7 @@ LONG WINAPI ObserveVectoredException(EXCEPTION_POINTERS* exception) {
     static volatile LONG writing_exception = 0;
     if (exception != nullptr && exception->ExceptionRecord != nullptr &&
         (exception->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ||
+         exception->ExceptionRecord->ExceptionCode == EXCEPTION_INT_DIVIDE_BY_ZERO ||
          exception->ExceptionRecord->ExceptionCode == 0xC0000374u ||
          exception->ExceptionRecord->ExceptionCode == 0xC0000409u ||
          exception->ExceptionRecord->ExceptionCode == 0xE0421001u) &&

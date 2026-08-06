@@ -706,8 +706,8 @@ long lParam;
 						"FSplitBoxMouse");
 				break;
 				}
-			pt.xp = LOWORD(lParam);
-			pt.yp = HIWORD(lParam);
+			pt.xp = (short) LOWORD(lParam);
+			pt.yp = (short) HIWORD(lParam);
 			ClientToScreen(hwnd, (LPPOINT) &pt );
 			TrackSplitBar( pt, wk );
 			if ((wk == wkFtn || wk == wkAtn) && PwwdWw(wwCur)->wk == wk)

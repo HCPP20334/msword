@@ -335,10 +335,30 @@ struct CHRFG
 
 #define cbCHRFG sizeof(struct CHRFG)
 
+/* The original 16-bit layout used each structure's byte length as its type
+tag, which made grpchr records self-scanning.  Native x64 alignment makes
+some otherwise unrelated records the same size (CHR and CHRDF are both 32
+bytes), so the x64 port uses explicit unique tags and maps them back to their
+storage lengths while scanning. */
+#ifdef OPUS_X64
+#define chrmEnd             1
+#define chrmChp             2
+#define chrmTab             3
+#define chrmVanish          4
+#define chrmFormula         5
+#define chrmDisplayField    6
+#define chrmFormatGroup     7
+#define CbFromChrm(chrm) \
+	((chrm) == chrmChp ? cbCHR : \
+	 (chrm) == chrmTab ? cbCHRT : \
+	 (chrm) == chrmVanish ? cbCHRV : \
+	 (chrm) == chrmFormula ? cbCHRF : \
+	 (chrm) == chrmDisplayField ? cbCHRDF : \
+	 (chrm) == chrmFormatGroup ? cbCHRFG : cbCHRE)
+#else
 /* chrm's are also used as the lengths of the structures so that grpchr
 can be scanned easily. Note that in case of cbCHRT = cbCHRV we fudge the
 numbers so that they come out all different */
-
 #define chrmChp cbCHR                   /* 14(mac) 18(win) */
 #define chrmTab cbCHRT                  /* 4 */
 #define chrmVanish cbCHRV               /* 6 */
@@ -348,6 +368,8 @@ numbers so that they come out all different */
 /* the chrmEnd type chr has no separate definition, we just use the first
 two bytes of a chr */
 #define chrmEnd cbCHRE                  /* 2 */
+#define CbFromChrm(chrm) (chrm)
+#endif
 
 
 #ifdef MAC
@@ -396,7 +418,11 @@ typedef union {
 		int	dyp;
 		int	dyt;
 		};
+#ifdef OPUS_X64
+	long long wlAll; /* covers both native 32-bit metric fields */
+#else
 	long 	wlAll;
+#endif
 	}	DYY;
 #else
 typedef union {

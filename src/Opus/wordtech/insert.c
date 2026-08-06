@@ -1403,6 +1403,11 @@ LNoHyphen:
 		}
 	else
 		{
+		/* Appending just beyond the terminal display PLC must dirty the DR
+		 * itself, not only the WWD.  InvalCp3 deliberately ignores ranges
+		 * beyond the currently displayed cpMac, so without this the window
+		 * is later marked clean with no EDL for the new paragraph. */
+		pdrT->fDirty = fTrue;
 		FreePdrf(&drfFetch);
 		InvalCp(PcaSet(&caT, selCur.doc, cpMinInval, cpMinInval + 1));
 		UpdateWw(wwCur, fFalse);
@@ -1636,6 +1641,14 @@ not following in cp space (yp space already checked above) */
 /* next line is invalid if it exists (<dlMac) and
 not following in cp space or not following in yp space */
 			if (cpNextLine != vfli.cpMac ||
+#ifdef OPUS_X64
+					/* The quick-insert piece can leave the terminal PLC
+					 * boundary equal to the EOP line's cpMac even though
+					 * the insertion point is the start of a new paragraph.
+					 * Do not mark the window clean until UpdateWw has
+					 * materialized that following display line. */
+					(dl >= IMacPlc(hplcedl) && cpInsNew >= vfli.cpMac) ||
+#endif
 					(dl < IMacPlc(hplcedl) &&
 					((GetPlc(hplcedl, dl, &edl), edl.fDirty) ||
 					edl.ypTop != ypTop + vfli.dypLine)) ||

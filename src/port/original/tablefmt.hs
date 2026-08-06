@@ -25,7 +25,6 @@
 #define tmcNextColumn     (tmcUserMin + 20)
 #define tmcPrevColumn     (tmcUserMin + 21)
 
-#pragma pack(push, 2)
 typedef struct _CABFORMATTABLE
 {
 	CABH cabh;
@@ -46,7 +45,6 @@ typedef struct _CABFORMATTABLE
 	int jc;
 	BOOL fWholeTable;
 } CABFORMATTABLE;
-#pragma pack(pop)
 
 typedef CABFORMATTABLE **HCABFORMATTABLE;
 #define cabiCABFORMATTABLE Cabi((sizeof(CABFORMATTABLE) + sizeof(WORD) - 1) / sizeof(WORD), 1)

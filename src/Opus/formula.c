@@ -141,8 +141,9 @@ int *pbchr;
 {
 	struct CHR *pchr;
 	int bchr = vbchrMac;
-	if ((vbchrMac += chrm) > vbchrMax)
-		if (!FExpandGrpchr(chrm))
+	int cb = CbFromChrm(chrm);
+	if ((vbchrMac += cb) > vbchrMax)
+		if (!FExpandGrpchr(cb))
 			return 0;
 	pchr = &((**vhgrpchr)[*pbchr = bchr]);
 	pchr->ich = ich;
@@ -887,12 +888,12 @@ fraction line is dypFract above the base line (func of hps of *f command)
 		if (vprsu.prid == pridLaser && vfli.fPrint)
 			dypChSym = dypChSym * 9 / 8;
 #endif /* MAC */
-		PchpSetChrDyp(pfma1->bchr - chrmChp,
+		PchpSetChrDyp(pfma1->bchr - cbCHR,
 				dypChSym,
 				chRootExt, fTrue)->fSpec = fTrue;
 
 		FFormatChSpecSymbol(
-				PchpSetChrDyp((bchr = pfma1->bchr - chrmChp - chrmFormula - chrmChp),
+				PchpSetChrDyp((bchr = pfma1->bchr - cbCHR - cbCHRF - cbCHR),
 				dypChSym,
 				chRoot, fTrue),
 				chRoot, &dxpChSym, &dxtChSym,
@@ -915,7 +916,7 @@ fraction line is dypFract above the base line (func of hps of *f command)
 		dytAscent = dytAscentCh1 - dyt2;
 
 		/* update CHRF to goto start of root symbol */
-		SetChrf(bchr - chrmFormula, dxp3 - dxpChSym,
+		SetChrf(bchr - cbCHRF, dxp3 - dxpChSym,
 				dyp2,
 				fFalse);
 #ifdef MAC  /* win does not have prid */
@@ -924,7 +925,7 @@ same place as the root symbol and also ends up there.
 On other printers, extension is drawn with width dxp2 after the root symbol */
 		if (vprsu.prid == pridLaser && vfli.fPrint)
 			{
-			SetChrf(bchr + chrmChp, - dxpChSym,
+			SetChrf(bchr + cbCHR, - dxpChSym,
 					0, fFalse);
 			dxpLarger = dxpChSym; /* move right from ext to operand */
 			}
@@ -1033,7 +1034,7 @@ On other printers, extension is drawn with width dxp2 after the root symbol */
 		Assert(pchrf->chrm == chrmFormula);
 
 		/* for fixing up bounding symbols */
-		bchr -= chrmChp + chrmFormula;
+		bchr -= cbCHR + cbCHRF;
 		ich = pfma1->ich - 1;
 
 		ch1 = pfma1->chLeft;
@@ -1049,11 +1050,11 @@ On other printers, extension is drawn with width dxp2 after the root symbol */
 			{
 			if (ch2 != 0)
 				{
-				bchr -= chrmChp + chrmFormula;
+				bchr -= cbCHR + cbCHRF;
 				ich--;
 				}
 			FFormatChSpecSymbol(
-					PchpSetChrDyp(bchr + chrmFormula, dyp1, ch1, fTrue),
+					PchpSetChrDyp(bchr + cbCHRF, dyp1, ch1, fTrue),
 					ch1, &dxp2, &dxt2,
 					&dypAscentCh1, &dypDescentCh1, &dytAscentCh1, &dytDescentCh1);
 			SetChrf(bchr, 0, dyp2 = 
@@ -1065,7 +1066,7 @@ On other printers, extension is drawn with width dxp2 after the root symbol */
 					(dytDescentCh1 + dytAscentCh1 - dyt1) / 2;
 
 			vfli.rgdxp[ich++] = dxp2;
-			bchr += chrmChp + chrmFormula;
+			bchr += cbCHR + cbCHRF;
 			}
 
 		/* right symbol */
@@ -1078,7 +1079,7 @@ On other printers, extension is drawn with width dxp2 after the root symbol */
 		else
 			{
 			FFormatChSpecSymbol(
-					PchpSetChrDyp(bchr + chrmFormula, dyp1, ch2, fTrue),
+					PchpSetChrDyp(bchr + cbCHRF, dyp1, ch2, fTrue),
 					ch2, &dxp3, &dxt3,
 					&dypAscentCh2, &dypDescentCh2, &dytAscentCh2, &dytDescentCh2);
 			SetChrf(bchr, dxp1, -dyp2 + (dyp3 =
@@ -1142,7 +1143,7 @@ On other printers, extension is drawn with width dxp2 after the root symbol */
 		dyt3 = pfmaEnd->dytAscent + pfmaEnd->dytDescent;
 
 		/* calculate size of symbol */
-		bchr = pfma1->bchr - chrmChp;
+		bchr = pfma1->bchr - cbCHR;
 		ch1 = pfma1->chLeft;
 
 		FFormatChSpecSymbol(
@@ -1211,7 +1212,7 @@ On other printers, extension is drawn with width dxp2 after the root symbol */
 			dxtLarger = max(dxt1, dxt2);
 
 			/* goto start of symbol */
-			SetChrf(bchr - chrmFormula, 0,
+			SetChrf(bchr - cbCHRF, 0,
 					dyp3,
 					fFalse);
 
@@ -1255,7 +1256,7 @@ On other printers, extension is drawn with width dxp2 after the root symbol */
 					dxt1 / 2 )) - dxtChSym / 2;
 
 			/* goto start of symbol */
-			SetChrf(bchr - chrmFormula,
+			SetChrf(bchr - cbCHRF,
 					dxpLarger,
 					dyp3,
 					fFalse);

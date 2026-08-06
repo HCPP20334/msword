@@ -1,2 +1,7 @@
 #pragma once
-static DLG_CONST DLT dltNewDoc = { 0 };
+/* Regenerated from Opus/dlg/new.des. */
+extern BOOL FDlgNew(DLM, TMC, WORD, WORD, WORD);
+static DLG_CONST DLT dltNewDoc = {
+    { 20, 24, 127, 114 }, IDDNewDoc, tmcNewType, FDlgNew,
+    9, bdrSysMenu, { 0 }
+};

@@ -133,26 +133,40 @@ struct SCC
 					};
 				struct CA ca;
 				};
-			int     dcpDepend : 8;
+			unsigned char dcpDepend;
 #ifdef OPUS_X64
 			int     fDirtyDr : 1;
 #else
 			int     fDirty : 1;
 #endif
 			int     fCpBad : 1;
-			int     fLimSuspect: 1;
-			int     : 5;
+			int     fLimSuspect : 1;
+			int     fNoParaStart : 1;
+			int     fIncomplete : 1;
+			int     fInTable : 1;
+			int     fBottomTableFrame : 1;
+			int     fForceWidth : 1;
 			struct PLCEDL **hplcedl;
 			int     dypAbove;
-					int     dxpOutLeft;
-					int     dxpOutRight;
-					int     idrFlow;        /* text should flow to this dr */
-					int     lrk;            /* type of lr from which this came */
-					int     fNoPrev : 1;    /* redundant bit: 1 means there is no
-									dr with this dr as successor */
-					int     fConstrainLeft : 1;     /* constrained by abs on left */
-					int     fConstrainRight : 1;    /* on right */
-					int     wSpare1 : 13;  /* spare for future use */
+			int     dxpOutLeft;
+			int     dxpOutRight;
+			int     idrFlow;        /* text should flow to this dr */
+			char    ccolM1;
+			char    lrk;            /* type of lr from which this came */
+			int     fNoPrev : 1;    /* redundant bit: 1 means there is no
+								dr with this dr as successor */
+			int     fConstrainLeft : 1;     /* constrained by abs on left */
+			int     fConstrainRight : 1;    /* on right */
+			int     fNewColOnly : 1;
+			int     fFatLine : 1;
+			int     fCantGrow : 1;
+			int     fHdrFtr : 1;
+			int     fForceFirstRow : 1;
+			int     fRMark : 1;
+			int     fSpaceBefore : 1;
+			int     : 6;
+			int     xwLimScroll;
+			int     dxaBetween;
 			/* Note: the DR definition now includes a PLCEDL
 				header, but this is only for far PLCEDL's.  Since
 				the SCC is using a near PLCEDL defined at the
@@ -211,6 +225,12 @@ struct SCC
 			};
 		};
 	};
+
+#ifdef OPUS_X64
+typedef char OPUS_SCC_HPLCEDL_OFFSET_MUST_MATCH_DR[
+	(offsetof(struct SCC, hplcedl) - offsetof(struct SCC, rgdr) ==
+	 offsetof(struct DR, hplcedl)) ? 1 : -1];
+#endif
 
 #define cwSCC (sizeof (struct SCC) / sizeof (int))
 

@@ -22,13 +22,13 @@ typedef struct _CABCUSTOMIZE
 {
 	CABH cabh;
 	WORD sab;
+	CHAR **hszName;
+	CHAR **hszInitials;
 	int iAS;
 	int iUnit;
 	BOOL fBkgrndPag;
 	BOOL fPromptSI;
 	BOOL fAutoDelete;
-	CHAR **hszName;
-	CHAR **hszInitials;
 	int cBtnFldClicks;
 } CABCUSTOMIZE;
 

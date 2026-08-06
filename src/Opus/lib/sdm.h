@@ -401,7 +401,11 @@ typedef struct _dli			// DiaLog Initializer.
 	HWND	hwnd;
 	int	dx, dy;
 	FDLG	fdlg;
+#ifdef OPUS_X64
+	UINT_PTR wRef;
+#else
 	WORD	wRef;
+#endif
 	BYTE *	rgb;			// App-supplied rgtmw (in sbDlg).
 
 #ifdef	SDM_MULTI_SB
@@ -419,7 +423,11 @@ typedef struct _dli			// DiaLog Initializer.
 ///////////////////////////////////////////////////////////////////////////////
 // Misc Functions .
 
+#ifdef OPUS_X64
+extern UINT_PTR PASCAL wRefDlgCur;		// Cached pointer-sized value.
+#else
 extern WORD	PASCAL	wRefDlgCur;		// Cached value. 
+#endif
 extern HCAB	PASCAL	hcabDlgCur;		// Cached value. 
 
 #define	WRefDlgCur()	wRefDlgCur
@@ -743,7 +751,11 @@ typedef	struct _dlh
 					// of mess in the sdm .c files. 
 #endif	//!SDM_ENV_PM
 
+#ifdef OPUS_X64
+	UINT_PTR wRef;			// User supplied Dialog pointer/value.
+#else
 	WORD	wRef;			// User supplied Dialog word. 
+#endif
 	FDLG	fdlg;			// Dialog flags. 
 	WORD	hid;			// Help ID. 
 	} DLH;				// Public part of DLG structure. 

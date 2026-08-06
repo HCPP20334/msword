@@ -9,6 +9,7 @@
 typedef struct _CABCONFIRMREPL
 {
 	CABH cabh;
+	WORD sab;
 	BOOL fConfirm;
 } CABCONFIRMREPL;
 

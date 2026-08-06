@@ -108,8 +108,13 @@ extern int          vwWinVersion;
 extern CHAR         szNone[];
 extern struct PREF 	vpref;
 extern long			vcmsecHelp;
+#ifdef OPUS_X64
+extern WPARAM       vwParamHelp;
+extern LPARAM       vlParamHelp;
+#else
 extern WORD         vwParamHelp;
 extern LONG         vlParamHelp;
+#endif
 extern int			wwCur;
 extern int			mwCur;
 extern int			vlm;
@@ -137,12 +142,21 @@ extern struct FB	vfbReplace;
 
 extern int	far pascal initwin_q();
 
+#ifdef OPUS_X64
+int ImnuFromHMenu(HMENU, UINT_PTR);
+#endif
+
 /* G L O B A L S */
 
 long	vcmsecHelp = 0L;        /* Time (in msec) to invalidate   */
 /* double-clicking for help mode. */
+#ifdef OPUS_X64
+WPARAM vwParamHelp;             /* Saved native WM_MENUSELECT parameters */
+LPARAM vlParamHelp = 0;
+#else
 WORD vwParamHelp;    			/* Saved for cxt computation */
 LONG vlParamHelp = 0;    		/* Saved for cxt computation */
+#endif
 HWND vhwndCBT = NULL;      		/* CBT application window */
 BOOL vfHelp = fFalse;			/* whether we're in Help mode */
 int	vcxtHelp = cxtNil;          /* current context */
@@ -581,17 +595,30 @@ HWND hwnd;
 	one of the drop-downs).  It is cxtDocMenuSelect if we have hilighted
 	something in the Doc system menu.
 */
+#ifdef OPUS_X64
+int CxtMenuSelect(WPARAM wParam, LPARAM lParam, int cxt)
+#else
 int	CxtMenuSelect(wParam, lParam, cxt)
 WORD wParam;
 LONG lParam;
 int	cxt;
+#endif
 {
+#ifdef OPUS_X64
+	int mf = HIWORD(wParam);
+	WORD item = LOWORD(wParam);
+#else
 	int	mf = LOWORD(lParam);
+#endif
 
 	Assert(cxt == cxtAppMenuSelect || cxt == cxtDocMenuSelect);
 
 	/* this case should have been taken care of in SaveMenuHelpContext */
+#ifdef OPUS_X64
+	Assert(lParam != 0);
+#else
 	Assert (HIWORD(lParam) != 0 && wParam != 0);
+#endif
 
 	/* Application or Document system menu */
 	if (mf & MF_SYSMENU)
@@ -605,8 +632,13 @@ int	cxt;
 				the SC_ code of the menu item */			
 			{
 			return ((cxt == cxtAppMenuSelect) ? 
+#ifdef OPUS_X64
+					CxtAppSysMenu(item) :
+					CxtDocSysMenu(item));
+#else
 					CxtAppSysMenu(wParam) : 
 					CxtDocSysMenu(wParam));
+#endif
 			}
 		}
 
@@ -614,7 +646,13 @@ int	cxt;
 	/* HIWORD is the main menu handle; wParam is the submenu handle */
 	if (mf & MF_POPUP)
 		{
+#ifdef OPUS_X64
+		HMENU hMenu = (HMENU) lParam;
+		HMENU hPopup = GetSubMenu(hMenu, item);
+		int imnu = ImnuFromHMenu(hMenu, (UINT_PTR) hPopup);
+#else
 		int	imnu = ImnuFromHMenu(HIWORD(lParam), wParam);
+#endif
 #ifdef DEBUG
 #define imnuHelp 11  /* stolen from menuhelp.c */
 		/* give the right context for Help menu in debug version (debug
@@ -631,7 +669,11 @@ int	cxt;
 		{
 		/* MF_SYSMENU && !MF_POPUP case handled in CmdHelp */
 		Assert (!(mf & MF_SYSMENU));
+#ifdef OPUS_X64
+		return (CxtFromBcm(item));
+#else
 		return (CxtFromBcm(wParam));
+#endif
 		}
 }
 
@@ -748,8 +790,13 @@ CMD CmdHelp(pcmb)
 CMB *pcmb;
 {
 	int	cxt = vcxtHelp;  /* because EndMenu can blow away vcxtHelp */
+#ifdef OPUS_X64
+	WPARAM wParamSav = vwParamHelp;  /* EndMenu resets these globals */
+	LPARAM lParamSav = vlParamHelp;
+#else
 	WORD wParamSav = vwParamHelp;  /* EndMenu resets these globals */
 	LONG lParamSav = vlParamHelp;
+#endif
 
 	EndMenu();  /* end menu mode if we're in it */
 

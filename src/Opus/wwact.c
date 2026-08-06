@@ -133,11 +133,15 @@ extern int              vfTableKeymap;
 
 
 /* %%Function:AppWndProcAct %%Owner:chic */
+#ifdef OPUS_X64
+LRESULT AppWndProcAct(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+#else
 long AppWndProcAct(hwnd, message, wParam, lParam)
 HWND      hwnd;
 unsigned  message;
 WORD      wParam;
 LONG      lParam;
+#endif
 {
 
 	switch (message)

@@ -6,6 +6,7 @@
 typedef struct _CABFILEPSWD
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszPswd;
 } CABFILEPSWD;
 

@@ -12,7 +12,6 @@
 #define tmcRPAllLevels   (tmcUserMin + 8)
 #define tmcRPFormat      ((tmcUserMin + 9) | ftmcGrouped)
 
-#pragma pack(push, 2)
 typedef struct _CABRENUMPARAS
 {
 	CABH cabh;
@@ -23,7 +22,6 @@ typedef struct _CABRENUMPARAS
 	BOOL fManual;
 	BOOL fShowAllLev;
 } CABRENUMPARAS;
-#pragma pack(pop)
 
 typedef CABRENUMPARAS **HCABRENUMPARAS;
 #define cabiCABRENUMPARAS Cabi((sizeof(CABRENUMPARAS) + sizeof(WORD) - 1) / sizeof(WORD), 2)

@@ -511,7 +511,7 @@ DYY *pdyyAscent, *pdyyDescent;
 	Profile( vpfi == pfiPictFmt ? StartProf( 30) : 0);
 
 	/* find the CP for the picture, taking vanished text into account */
-	for (vfmtss.cpRef = vfli.cpMin + ich; bchr < vbchrMac; bchr += pchr->chrm)
+	for (vfmtss.cpRef = vfli.cpMin + ich; bchr < vbchrMac; bchr += CbFromChrm(pchr->chrm))
 		{
 		pchr = (char *) **vhgrpchr + bchr;
 		if (pchr->ich > ich)

@@ -6,7 +6,6 @@
 #define tmcXeBold          (tmcUserMin + 3)
 #define tmcXeItalic        (tmcUserMin + 4)
 
-#pragma pack(push, 2)
 typedef struct _CABINDEXENTRY
 {
 	CABH cabh;
@@ -16,7 +15,6 @@ typedef struct _CABINDEXENTRY
 	BOOL fBold;
 	BOOL fItalic;
 } CABINDEXENTRY;
-#pragma pack(pop)
 
 typedef CABINDEXENTRY **HCABINDEXENTRY;
 #define cabiCABINDEXENTRY Cabi((sizeof(CABINDEXENTRY) + sizeof(WORD) - 1) / sizeof(WORD), 2)

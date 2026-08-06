@@ -9,7 +9,6 @@
 #define tmcHypChange      (tmcUserMin + 5)
 #define tmcHypNoChange    (tmcUserMin + 6)
 
-#pragma pack(push, 2)
 typedef struct _CABHYPHEN
 {
 	CABH cabh;
@@ -18,7 +17,6 @@ typedef struct _CABHYPHEN
 	BOOL fHypCaps;
 	BOOL fHypConfirm;
 } CABHYPHEN;
-#pragma pack(pop)
 
 typedef CABHYPHEN **HCABHYPHEN;
 #define cabiCABHYPHEN Cabi((sizeof(CABHYPHEN) + sizeof(WORD) - 1) / sizeof(WORD), 1)

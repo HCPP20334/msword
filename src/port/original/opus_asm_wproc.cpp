@@ -50,6 +50,7 @@ constexpr UINT kWmDdeData = 0x03e5;
 constexpr UINT kWmDdeRequest = 0x03e6;
 constexpr UINT kWmDdePoke = 0x03e7;
 constexpr UINT kWmDdeExecute = 0x03e8;
+constexpr UINT kWmOpusX64QuerySelection = WM_APP + 0x351;
 
 enum class MouseCursor { none, ibeam, arrow };
 
@@ -94,7 +95,8 @@ constexpr UINT kMwdMessages[] = {
 constexpr UINT kWwPaneMessages[] = {
     WM_CREATE, WM_SIZE, WM_SETFOCUS, WM_KILLFOCUS, WM_PAINT,
     WM_MOUSEACTIVATE, WM_SETCURSOR, WM_MOUSEMOVE, WM_LBUTTONDOWN,
-    WM_LBUTTONDBLCLK, WM_RBUTTONDOWN, WM_SYSCOMMAND, WM_MENUCHAR};
+    WM_LBUTTONDBLCLK, WM_RBUTTONDOWN, WM_SYSCOMMAND, WM_MENUCHAR,
+    kWmOpusX64QuerySelection};
 constexpr UINT kDdeMessages[] = {
     kWmDdeTerminate, kWmDdeAdvise, kWmDdeUnadvise, kWmDdeAck,
     kWmDdeData, kWmDdeRequest, kWmDdePoke, kWmDdeExecute};

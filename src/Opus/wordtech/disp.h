@@ -17,6 +17,19 @@ struct EDL
 	union {
 		int grpfEdl;
 		struct {
+#ifdef OPUS_X64
+			/* Win16 packed dcpDepend and the EDL flags into one word.  A
+			 * byte followed by int bitfields starts a second allocation unit
+			 * under MSVC x64, so grpfEdl = 0 did not clear dlk and the other
+			 * flags.  Keep the original four-byte overlay explicitly. */
+			unsigned int dcpDepend : 8;
+			unsigned int dlk : 3;
+			unsigned int fDirty : 1;
+			unsigned int fHasBitmap : 1;
+			unsigned int fTableDirty : 1;
+			unsigned int fColorMFP : 1;
+			unsigned int fNeedEnhance : 1;
+#else
 			unsigned char      dcpDepend;
 			int     dlk : 3;
 			int     fDirty : 1;
@@ -24,8 +37,18 @@ struct EDL
 			int     fTableDirty : 1;
 			int     fColorMFP: 1;   /* color metafile (WIN) */
 			int     fNeedEnhance: 1;  /* postponed display (WIN) */
+#endif
 		};
 		struct {
+#ifdef OPUS_X64
+			unsigned int : 8;
+			unsigned int fEnd : 1;
+			unsigned int fEndPage : 1;
+			unsigned int fEndDr : 1;
+			unsigned int : 1;
+			unsigned int fRMark : 1;
+			unsigned int : 3;
+#else
 			int     : 8;
 /* set iff edl is the endmark. Other fields are then:
 cp = cpMac of doc, dcpMac = 0 */
@@ -39,6 +62,7 @@ cp = cpMac of doc, dcpMac = 0 */
 			/**/
 			int     fRMark : 1; 
 			int     : 3;
+#endif
 		};
 	};
 	struct {

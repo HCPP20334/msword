@@ -10,8 +10,8 @@ typedef struct _CABRECORDER
 	CABH cabh;
 	WORD sab;
 	CHAR **pszName;
-	int iContext;
 	CHAR **pszDesc;
+	int iContext;
 } CABRECORDER;
 
 typedef CABRECORDER **HCABRECORDER;

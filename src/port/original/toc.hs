@@ -11,7 +11,6 @@
 #define tmcTocFrom      (tmcUserMin + 5)
 #define tmcTocTo        (tmcUserMin + 6)
 
-#pragma pack(push, 2)
 typedef struct _CABTOC
 {
 	CABH cabh;
@@ -22,7 +21,6 @@ typedef struct _CABTOC
 	unsigned wTocTo;
 	BOOL fReplace;
 } CABTOC;
-#pragma pack(pop)
 
 typedef CABTOC **HCABTOC;
 #define cabiCABTOC Cabi((sizeof(CABTOC) + sizeof(WORD) - 1) / sizeof(WORD), 0)

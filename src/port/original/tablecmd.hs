@@ -15,7 +15,6 @@
 #define tmcMergeCells     (tmcUserMin + 10)
 #define tmcSplitCells     (tmcUserMin + 11)
 
-#pragma pack(push, 2)
 typedef struct _CABEDITTABLE
 {
 	CABH cabh;
@@ -23,7 +22,6 @@ typedef struct _CABEDITTABLE
 	int cmdtype;
 	BOOL fShiftVert;
 } CABEDITTABLE;
-#pragma pack(pop)
 
 typedef CABEDITTABLE **HCABEDITTABLE;
 #define cabiCABEDITTABLE Cabi((sizeof(CABEDITTABLE) + sizeof(WORD) - 1) / sizeof(WORD), 0)

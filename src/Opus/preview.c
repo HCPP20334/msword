@@ -477,6 +477,8 @@ LEndPaint:
 
 	case WM_VSCROLL:
 			{
+			int sbMessage;
+			int posNew;
 		/* Deals with mouse activity in vertical scroll bar.
 			Jumps by 1 or 2 pages (depending on vpvs.fFacing flag)
 			unless thumb is manually moved, in which case the
@@ -491,10 +493,18 @@ LEndPaint:
 				goto LRet;
 				}
 
-			switch (wParam)
+#ifdef OPUS_X64
+			sbMessage = LOWORD(wParam);
+			posNew = HIWORD(wParam);
+#else
+			sbMessage = wParam;
+			posNew = LOWORD(lParam);
+#endif
+
+			switch (sbMessage)
 				{
 			case SB_THUMBPOSITION:
-				fFail = !FGotoPagePrvw(hdc,LOWORD(lParam),dipgdRandom);
+				fFail = !FGotoPagePrvw(hdc, posNew, dipgdRandom);
 				break;
 
 			case SB_THUMBTRACK:
@@ -507,10 +517,10 @@ LEndPaint:
 					struct PLCPGD **hplcpgd = PdodDoc(vpvs.docPrvw)->hplcpgd;
 					CP cpThumb;
 
-					if (LOWORD(lParam) == vpvs.ypLastScrlBar)
+					if (posNew == vpvs.ypLastScrlBar)
 						cpThumb= cpMac-1;
 					else
-						cpThumb = (cpMac*LOWORD(lParam))/(vpvs.ypLastScrlBar);
+						cpThumb = (cpMac*posNew)/(vpvs.ypLastScrlBar);
 					if (hplcpgd == hNil || (ipgd=IInPlcCheck(hplcpgd,cpThumb)) < 0)
 						ipgd = 0;
 					if (ipgd != ipgdLast)

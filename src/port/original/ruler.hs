@@ -13,6 +13,7 @@
 typedef struct _CABRULER
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszStyle;
 } CABRULER;
 

@@ -6,6 +6,7 @@
 typedef struct _CABGOTO
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszGoto;
 } CABGOTO;
 

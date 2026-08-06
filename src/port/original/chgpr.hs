@@ -7,6 +7,7 @@
 typedef struct _CABCHGPR
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszLb;
 } CABCHGPR;
 

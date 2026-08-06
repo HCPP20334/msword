@@ -4,6 +4,7 @@
 typedef struct _CABABOUT
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszAboutApp;
 	CHAR **hszAboutVersion;
 	CHAR **hszAboutCopyright;

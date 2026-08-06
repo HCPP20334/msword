@@ -9,10 +9,10 @@
 #define tmcCropBottom (tmcUserMin + 5)
 #define tmcCropRight  (tmcUserMin + 6)
 
-#pragma pack(push, 2)
 typedef struct _CABFORMATPIC
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszOrigSize;
 	int iPicBrcl;
 	int wScaleMy;
@@ -22,7 +22,6 @@ typedef struct _CABFORMATPIC
 	int wCropBottom;
 	int wCropRight;
 } CABFORMATPIC;
-#pragma pack(pop)
 
 typedef CABFORMATPIC **HCABFORMATPIC;
 

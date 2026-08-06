@@ -9,9 +9,10 @@
 typedef struct _CABINSFILE
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszFile;
-	int iDirectory;
 	CHAR **hszRange;
+	int iDirectory;
 	BOOL fLink;
 } CABINSFILE;
 

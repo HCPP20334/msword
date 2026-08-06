@@ -88,7 +88,7 @@ int DosxError() {
         error, static_cast<DWORD>((std::numeric_limits<int>::max)())));
 }
 
-void* HpOfBptbExt(const int page_index) {
+unsigned char* HpOfBptbExt(const int page_index) {
     if (vbptbExt.pages == nullptr || page_index < 0 ||
         page_index >= vbptbExt.ibp_max) {
         return nullptr;
@@ -97,7 +97,7 @@ void* HpOfBptbExt(const int page_index) {
 }
 
 unsigned char* HpBaseForIbp(const int page_index) {
-    return static_cast<unsigned char*>(HpOfBptbExt(page_index));
+    return HpOfBptbExt(page_index);
 }
 
 void OsTime(NativeTime* time) {

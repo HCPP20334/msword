@@ -11,8 +11,9 @@
 typedef struct _CABNEWDOC
 {
 	CABH cabh;
-	BOOL fNewDot;
+	WORD sab;
 	CHAR **hszNewType;
+	BOOL fNewDot;
 } CABNEWDOC;
 
 typedef CABNEWDOC **HCABNEWDOC;

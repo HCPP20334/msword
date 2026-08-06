@@ -4,8 +4,8 @@ typedef struct _CABPASTELINK
 {
 	CABH cabh;
 	WORD sab;
-	BOOL fHot;
 	CHAR **hszLink;
+	BOOL fHot;
 } CABPASTELINK;
 typedef CABPASTELINK **HCABPASTELINK;
 #define cabiCABPASTELINK Cabi((sizeof(CABPASTELINK) + sizeof(WORD) - 1) / sizeof(WORD), 1)

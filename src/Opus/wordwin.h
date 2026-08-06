@@ -644,7 +644,7 @@ struct PREF
 	int	   fShowAllMacros: 1 ; 
 	int	   : 1 ; /* spare */
 		/* used in customize dialog */
-	int	   iAS: 2; /* Auto Save frequency index. */
+	unsigned int iAS: 2; /* Auto Save frequency index (0..3). */
 
 	int	   fDraftView: 1;	
 	int	   fZoomApp: 1;

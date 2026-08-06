@@ -29,11 +29,12 @@ typedef struct _CABPRINT
 	CABH cabh;
 	WORD sab;
 	CHAR **hszPrPrinter;
+	CHAR **hszPrFrom;
+	CHAR **hszPrTo;
+	CHAR **hszFileName;
 	int istPrSrc;
 	int cCopies;
 	int prng;
-	CHAR **hszPrFrom;
-	CHAR **hszPrTo;
 	BOOL fReverse;
 	BOOL fDraft;
 	BOOL fRefresh;
@@ -42,7 +43,6 @@ typedef struct _CABPRINT
 	BOOL fAnnotations;
 	BOOL fSeeHidden;
 	BOOL fShowInst;
-	CHAR **hszFileName;
 } CABPRINT;
 
 typedef CABPRINT **HCABPRINT;

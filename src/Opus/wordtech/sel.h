@@ -23,21 +23,21 @@ struct SEL
 	{
 	union {
 		struct {
-			int     : 10;
-			int     sk : 6;
+			unsigned int     : 10;
+			unsigned int     sk : 6;
 			};
 		struct {
-			int fRightward : 1;
-			int fSelAtPara: 1;
-			int fWithinCell : 1;
-			int fTableAnchor : 1;
-			int : 6;
-			int fColumn : 1;
-			int fTable :  1;
-			int fGraphics : 1;
-			int fBlock : 1;
-			int fNil : 1;
-			int fIns : 1;
+			unsigned int fRightward : 1;
+			unsigned int fSelAtPara: 1;
+			unsigned int fWithinCell : 1;
+			unsigned int fTableAnchor : 1;
+			unsigned int : 6;
+			unsigned int fColumn : 1;
+			unsigned int fTable :  1;
+			unsigned int fGraphics : 1;
+			unsigned int fBlock : 1;
+			unsigned int fNil : 1;
+			unsigned int fIns : 1;
 			};
 		};
 	unsigned char      fForward;
@@ -89,22 +89,22 @@ struct SEL
 	int     dyp;
 /* tick at which cursor was last blinked */
 	long    tickOld;
-	int     fUpdateChp : 1;
-	int     fUpdateChpGray : 1;
-	int     fUpdatePap : 1;
-	int     fUpdateRibbon : 1;
-	int     fUpdateRuler : 1;
-	int     fUpdateStatLine : 1;
-	int     fUpdateStatLine2: 1;
+	unsigned int fUpdateChp : 1;
+	unsigned int fUpdateChpGray : 1;
+	unsigned int fUpdatePap : 1;
+	unsigned int fUpdateRibbon : 1;
+	unsigned int fUpdateRuler : 1;
+	unsigned int fUpdateStatLine : 1;
+	unsigned int fUpdateStatLine2: 1;
 
 #ifdef	MAC
-	int     fNinchChp : 1;
-	int     fNinchPap : 1;
-	int     fNinchSep : 1;
-	int     fItalic : 1;
-	int     : 5;
+	unsigned int fNinchChp : 1;
+	unsigned int fNinchPap : 1;
+	unsigned int fNinchSep : 1;
+	unsigned int fItalic : 1;
+	unsigned int : 5;
 #else
-	int		: 9;
+	unsigned int : 9;
 #endif	/* MAC */
 	struct RC       rcwClip;
 	struct  CHP  chp;

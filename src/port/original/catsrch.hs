@@ -15,7 +15,6 @@
 #define tmcCatSrhMatchCase  (tmcUserMin + 11)
 #define tmcCatSrhRedo       (tmcUserMin + 12)
 
-#pragma pack(push, 2)
 typedef struct _CABCATSEARCH
 {
 	CABH cabh;
@@ -34,7 +33,6 @@ typedef struct _CABCATSEARCH
 	BOOL fCatSrhMatchCase;
 	BOOL fCatSrhRedo;
 } CABCATSEARCH;
-#pragma pack(pop)
 
 typedef CABCATSEARCH **HCABCATSEARCH;
 #define cabiCABCATSEARCH Cabi((sizeof(CABCATSEARCH) + sizeof(WORD) - 1) / sizeof(WORD), 7)

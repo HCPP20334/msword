@@ -12,6 +12,7 @@
 typedef struct _CABPROMPT
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszPrompt;
 	CHAR **hszInput;
 } CABPROMPT;

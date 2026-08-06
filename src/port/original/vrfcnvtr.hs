@@ -8,6 +8,7 @@
 typedef struct _CABEXCR
 {
 	CABH cabh;
+	WORD sab;
 	int iFmt;
 } CABEXCR;
 

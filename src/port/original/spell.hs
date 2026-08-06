@@ -12,7 +12,6 @@
 #define tmcSplIgnoreCaps (tmcUserMin + 8)
 #define tmcSplAutoSugg  (tmcUserMin + 9)
 
-#pragma pack(push, 2)
 typedef struct _CABSPELLER
 {
 	CABH cabh;
@@ -23,7 +22,6 @@ typedef struct _CABSPELLER
 	BOOL fSplIgnoreCaps;
 	BOOL fSplAutoSugg;
 } CABSPELLER;
-#pragma pack(pop)
 
 typedef CABSPELLER **HCABSPELLER;
 #define cabiCABSPELLER Cabi((sizeof(CABSPELLER) + sizeof(WORD) - 1) / sizeof(WORD), 3)

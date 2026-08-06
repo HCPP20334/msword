@@ -316,8 +316,13 @@ extern HWND             vhwndCBT;
 extern int              vcxtHelp;     /* help context id */
 extern BOOL             vfHelp;       /* whether we're in Help Mode */
 extern long             vcmsecHelp;
+#ifdef OPUS_X64
+extern WPARAM           vwParamHelp;
+extern LPARAM           vlParamHelp;
+#else
 extern WORD             vwParamHelp;
 extern LONG             vlParamHelp;
+#endif
 extern HCURSOR          vhcHourGlass;
 extern HCURSOR          vhcIBeam;
 extern HCURSOR          vhcArrow;
@@ -390,7 +395,25 @@ extern int		vfNoInval;
 void MwdVertScroll( int, WORD, int );
 void MwdHorzScroll( int, WORD, int );
 void WwPaneMouse( int, unsigned, WORD, POINT );
+#ifdef OPUS_X64
+LRESULT LMenuChar(HWND, WPARAM, LPARAM);
+void DrawMenuHelp(HMENU, UINT_PTR, int);
+void SaveMenuHelpContext(WPARAM, LPARAM, int);
+
+/*
+ * Opus used the sign bit of a Win16 WORD-sized int to distinguish its
+ * command ids from the SC_* values in WM_SYSCOMMAND.  A Win64 int is 32
+ * bits, so casting WPARAM to int makes every SC_* value positive and causes
+ * Word to swallow window move/size/close commands as application commands.
+ */
+#define FOpusCommandWParam(wParam) ((short) LOWORD(wParam) >= 0)
+#define BcmFromWParam(wParam) ((WORD) LOWORD(wParam))
+#define WM_OPUS_X64_QUERY_SELECTION (WM_APP + 0x351)
+#else
 LONG LMenuChar(HWND, WORD, LONG);
+#define FOpusCommandWParam(wParam) ((int) (wParam) >= 0)
+#define BcmFromWParam(wParam) (wParam)
+#endif
 
 
 #ifdef DEBUG
@@ -750,12 +773,21 @@ LONG      lParam;
 {
 	static int fEnteredIdle=fTrue;
 	static HMENU hMenu;
+#ifdef OPUS_X64
+	static UINT_PTR bcm;
+#else
 	static int bcm;
+#endif
 	static int mf;
 	int cxt;
 
+#ifdef OPUS_X64
+	LRESULT AppWndProcRare(HWND, UINT, WPARAM, LPARAM);
+	LRESULT AppWndProcAct(HWND, UINT, WPARAM, LPARAM);
+#else
 	long AppWndProcRare();
 	long AppWndProcAct();
+#endif
 
 	struct RC   rc;
 
@@ -799,7 +831,7 @@ LONG      lParam;
 		/* CBT hook must be the first thing we do under WM_COMMAND */
 
 		if (vhwndCBT && !SendMessage(vhwndCBT, WM_CBTSEMEV, smvCommand,
-				MAKELONG(CxtFromBcm(wParam), 0 /* from menu */)))
+				MAKELONG(CxtFromBcm(BcmFromWParam(wParam)), 0 /* from menu */)))
 			{
 			return (0L);
 			}
@@ -813,12 +845,12 @@ LONG      lParam;
 
 		RestorePrompt();
 
-		if (wParam == bcmNil) /* menu empty */
+		if (BcmFromWParam(wParam) == bcmNil) /* menu empty */
 			return (0L);
 
-		Assert((int) wParam >= 0);
+		Assert(FOpusCommandWParam(wParam));
 		vcxtHelp = cxtNil;
-		FExecCmd(wParam);
+		FExecCmd(BcmFromWParam(wParam));
 		break;
 
 	case WM_SYSCOMMAND:
@@ -887,9 +919,9 @@ LONG      lParam;
 			Profile(vpfi == pfiMenu ? StartProf(30) : 0);
 			EnsureFocusInPane();
 			vcxtHelp = cxtNil;
-			if ((int) wParam >= 0)
+			if (FOpusCommandWParam(wParam))
 				{
-				CmdExecBcmKc(wParam, kcNil);
+				CmdExecBcmKc(BcmFromWParam(wParam), kcNil);
 				}
 			else
 				{
@@ -955,9 +987,17 @@ LDefProc:
 
 		if (vhwndStatLine)
 			{
+#ifdef OPUS_X64
+			hMenu = (HMENU) lParam;
+			mf = HIWORD(wParam);
+			bcm = (mf & MF_POPUP) && hMenu != NULL ?
+					(UINT_PTR) GetSubMenu(hMenu, LOWORD(wParam)) :
+					(UINT_PTR) LOWORD(wParam);
+#else
 			hMenu = HIWORD(lParam);
 			bcm = wParam;
 			mf = LOWORD(lParam );
+#endif
 			if (hMenu == 0 && fEnteredIdle)
 				DrawMenuHelp(hMenu, bcm, mf);
 			fEnteredIdle = fFalse;
@@ -1026,9 +1066,17 @@ LONG      lParam;
 	extern int mwCreate;
 	static int fEnteredIdle=fTrue;
 	static HMENU hMenu;
+#ifdef OPUS_X64
+	static UINT_PTR bcm;
+#else
 	static int bcm;
+#endif
 	static int mf;
+#ifdef OPUS_X64
+	LRESULT MwdWndProcRare(HWND, UINT, WPARAM, LPARAM);
+#else
 	long MwdWndProcRare();
+#endif
 	int ww;
 	PAINTSTRUCT ps;
 
@@ -1065,6 +1113,21 @@ LONG      lParam;
 		SetUatMode(uamNavigation);
 		StopUatTimer();
 #endif /* RSH */
+#ifdef OPUS_X64
+		{
+		WORD code = LOWORD(wParam);
+		int dqThumb = HIWORD(wParam);
+		HWND hwndScroll = (HWND) lParam;
+
+		if (message == WM_HSCROLL)
+			MwdHorzScroll(wwCur, code, dqThumb);
+		else
+			MwdVertScroll(((*hwwdCur)->hwndVScroll == hwndScroll) ?
+					wwCur : WwOther(wwCur), code, dqThumb);
+		if (vfRecording)
+			RecordScroll(message, code, dqThumb);
+		}
+#else
 		if (message == WM_HSCROLL)
 			MwdHorzScroll( wwCur, wParam, (int)lParam);
 		else
@@ -1072,11 +1135,17 @@ LONG      lParam;
 					wwCur : WwOther(wwCur), wParam, (int)lParam);
 		if (vfRecording)
 			RecordScroll(message, wParam, LOWORD(lParam));
+#endif
 		break;
 
 	case WM_MOUSEACTIVATE:
 			{
-			int iRet = 0;
+			int iRet =
+#ifdef OPUS_X64
+				MA_ACTIVATE;
+#else
+				0;
+#endif
 
 			if (vhwndAppModalFocus != hNil)
 				if (!vfDeactByOtherApp)
@@ -1115,7 +1184,14 @@ LONG      lParam;
 					NewCurWw( PmwdMw(MwFromHwndMw(hwnd))->wwActive, fFalse /*fDoNotSelect*/);
 					/* fall through */
 				default:
+#ifdef OPUS_X64
+					/* Modern USER can activate and deliver this click without the
+					 * Win16 re-entrancy workaround.  Eating it makes the first click
+					 * after switching documents disappear. */
+					iRet = MA_ACTIVATE;
+#else
 					iRet = MA_ACTIVATEANDEAT;
+#endif
 					break;
 					}
 				}
@@ -1189,8 +1265,8 @@ LONG      lParam;
 
 		EnsureFocusInPane();
 
-		if ((int) wParam >= 0)
-			return CmdExecBcmKc(wParam, kcNil) == cmdOK;
+		if (FOpusCommandWParam(wParam))
+			return CmdExecBcmKc(BcmFromWParam(wParam), kcNil) == cmdOK;
 
 		switch (wParam & 0xfff0)
 			{
@@ -1229,9 +1305,17 @@ LONG      lParam;
 
 		if (vhwndStatLine)
 			{
+#ifdef OPUS_X64
+			hMenu = (HMENU) lParam;
+			mf = HIWORD(wParam);
+			bcm = (mf & MF_POPUP) && hMenu != NULL ?
+					(UINT_PTR) GetSubMenu(hMenu, LOWORD(wParam)) :
+					(UINT_PTR) LOWORD(wParam);
+#else
 			hMenu = HIWORD(lParam);
 			bcm = wParam;
 			mf = LOWORD(lParam );
+#endif
 			if (hMenu == 0 && fEnteredIdle)
 				DrawMenuHelp(hMenu, bcm, mf);
 			fEnteredIdle = fFalse;
@@ -1278,15 +1362,23 @@ DefaultProc:    /* All messages not processed come here. */
 	else, we can compute the context from these saved values.
 */
 /* %%Function:SaveMenuHelpContext  %%Owner:rosiep */
+#ifdef OPUS_X64
+void SaveMenuHelpContext(WPARAM wParam, LPARAM lParam, int cxt)
+#else
 SaveMenuHelpContext(wParam,lParam,cxt)
 WORD      wParam;
 LONG      lParam;
 int       cxt;
+#endif
 {
 	Assert(cxt == cxtAppMenuSelect || cxt == cxtDocMenuSelect);
 
 	/* if we're exiting Menu Mode, no more help context */
+#ifdef OPUS_X64
+	if (lParam == 0 && HIWORD(wParam) == 0xffff)
+#else
 	if (HIWORD(lParam) == 0 || wParam == 0)
+#endif
 		{
 		vwParamHelp = 0;
 		vlParamHelp = 0;
@@ -1380,7 +1472,11 @@ LONG      lParam;
 {
 	int ww;
 	struct RC rc;
+#ifdef OPUS_X64
+	LRESULT RareWwPaneWndProc(HWND, UINT, WPARAM, LPARAM);
+#else
 	long RareWwPaneWndProc();
+#endif
 
 #ifdef SHOWPNEMSG
 	ShowMsg ("pn", hwnd, message, wParam, lParam);
@@ -1399,6 +1495,104 @@ LONG      lParam;
 		{
 	default:
 		return RareWwPaneWndProc( hwnd, message, wParam,lParam );
+
+#ifdef OPUS_X64
+	case WM_OPUS_X64_QUERY_SELECTION:
+		switch (LOWORD(wParam))
+			{
+			case 0: return (LRESULT) selCur.cpFirst;
+			case 1: return (LRESULT) selCur.cpLim;
+			case 2: return (LRESULT) selCur.fIns;
+			case 3: return (LRESULT) selCur.sty;
+			case 4: return (LRESULT) selCur.xw;
+			case 5: return (LRESULT) vfDoubleClick;
+			case 6: return (LRESULT) selCur.sk;
+			case 7: return (LRESULT) selCur.yw;
+			case 8: return (LRESULT) selCur.dyp;
+			case 9: return (LRESULT) selCur.fOn;
+			case 10: return (LRESULT) selCur.fHidden;
+			case 11: return (LRESULT) selCur.xpFirst;
+			case 12: return (LRESULT) selCur.xpLim;
+			case 13: return (LRESULT) vfli.cpMin;
+			case 14: return (LRESULT) vfli.cpMac;
+			case 15: return (LRESULT) vfli.xpLeft;
+			case 16: return (LRESULT) vfli.xpRight;
+			case 17: return (LRESULT) vfli.ichMac;
+			case 18: return (LRESULT) vfli.rgdxp[0];
+			case 19: return (LRESULT) vfli.rgdxp[
+					vfli.ichMac == 0 ? 0 : vfli.ichMac - 1];
+			case 24: return (LRESULT) sizeof(struct CHR);
+			case 25: return (LRESULT) sizeof(struct CHRT);
+			case 26: return (LRESULT) sizeof(struct CHRV);
+			case 27: return (LRESULT) sizeof(struct CHRF);
+			case 28: return (LRESULT) sizeof(struct CHRDF);
+			case 29: return (LRESULT) sizeof(struct CHRFG);
+			case 30:
+				{
+				struct DR *pdr = PdrGalley(PwwdWw(WwFromHwnd(hwnd)));
+				return (LRESULT) IMacPlc(pdr->hplcedl);
+				}
+			case 31:
+				{
+				struct DR *pdr = PdrGalley(PwwdWw(WwFromHwnd(hwnd)));
+				return (LRESULT) CpPlc(pdr->hplcedl, (int) lParam);
+				}
+			case 32:
+			case 33:
+			case 34:
+			case 35:
+				{
+				struct EDL edl;
+				struct DR *pdr = PdrGalley(PwwdWw(WwFromHwnd(hwnd)));
+				GetPlc(pdr->hplcedl, (int) lParam, &edl);
+				if (LOWORD(wParam) == 32) return (LRESULT) edl.ypTop;
+				if (LOWORD(wParam) == 33) return (LRESULT) edl.dyp;
+				if (LOWORD(wParam) == 34) return (LRESULT) edl.dcp;
+				return (LRESULT) edl.fDirty;
+				}
+			case 36:
+			case 37:
+				{
+				struct DR *pdr = PdrGalley(PwwdWw(WwFromHwnd(hwnd)));
+				return LOWORD(wParam) == 36 ?
+						(LRESULT) pdr->cpFirst : (LRESULT) pdr->cpLim;
+				}
+			case 38: return (LRESULT) sizeof(struct EDL);
+			case 39:
+				{
+				struct DR *pdr = PdrGalley(PwwdWw(WwFromHwnd(hwnd)));
+				return (LRESULT) pdr->fDirty;
+				}
+			case 40:
+				return (LRESULT) PwwdWw(WwFromHwnd(hwnd))->fDirty;
+			case 41: return (LRESULT) CpMacDocEdit(selCur.doc);
+			case 42:
+				{
+				struct DR *pdr = PdrGalley(PwwdWw(WwFromHwnd(hwnd)));
+				return (LRESULT) pdr->dyl;
+				}
+			case 43:
+				return (LRESULT) DyOfRc(&PwwdWw(WwFromHwnd(hwnd))->rcwDisp);
+			case 44:
+				{
+				struct DR *pdr = PdrGalley(PwwdWw(WwFromHwnd(hwnd)));
+				return (LRESULT) pdr->dxl;
+				}
+			case 45:
+				return (LRESULT) DxOfRc(&PwwdWw(WwFromHwnd(hwnd))->rcwDisp);
+			case 46: return (LRESULT) CpMacDoc(selCur.doc);
+			case 47:
+			case 48:
+				{
+				struct EDL edl;
+				struct DR *pdr = PdrGalley(PwwdWw(WwFromHwnd(hwnd)));
+				GetPlc(pdr->hplcedl, (int) lParam, &edl);
+				return LOWORD(wParam) == 47 ?
+						(LRESULT) edl.dlk : (LRESULT) edl.fEnd;
+				}
+			}
+		return (LRESULT) -1;
+#endif
 
 	case WM_SETFOCUS:
 		/* The window is getting the focus.  wParam contains the window
@@ -1483,7 +1677,14 @@ LONG      lParam;
 					}
 				else
 					{
+#ifdef OPUS_X64
+					/* The Win16 eat-on-activate workaround makes the next
+					 * physical click look like a double-click on modern USER.
+					 * Let the activating click position the caret immediately. */
+					return(MA_ACTIVATE);
+#else
 					return(MA_ACTIVATEANDEAT);
+#endif
 					}
 				}
 DefaultProc:    /* All messages not processed come here. */
@@ -2816,15 +3017,24 @@ lblSet:
 	by the window proc receiving the message.
 */
 /* %%Function:LMenuChar  %%Owner:peterj */
+#ifdef OPUS_X64
+LRESULT LMenuChar(HWND hwnd, WPARAM wParam, LPARAM lParam)
+#else
 LONG LMenuChar(hwnd, wParam, lParam)
 HWND hwnd;
 WORD wParam;
 LONG lParam;
+#endif
 {
 	if (vhwndAppModalFocus != NULL)
 		return MAKELONG(0, 1);
 
+#ifdef OPUS_X64
+	if (LOWORD(wParam) == '-' && !(HIWORD(wParam) & MF_POPUP) &&
+			hwwdCur != hNil)
+#else
 	if (wParam == '-' && !(LOWORD(lParam) & MF_POPUP) && hwwdCur != hNil)
+#endif
 		{
 		if (vfSysMenu)
 			{
@@ -3181,7 +3391,18 @@ BOOL fRightButton;
 			}
 		}
 
+#ifdef OPUS_X64
+	/*
+	 * The Win16 loop could rely on GetKeyState's queue snapshot while nested
+	 * inside the button-down dispatch.  On modern Windows that snapshot can
+	 * lag the physical/SENDINPUT transition and prematurely end a drag before
+	 * the corresponding button-up reaches this replay loop.
+	 */
+	return ((GetAsyncKeyState(fRightButton ? VK_RBUTTON : VK_LBUTTON) &
+			0x8000) != 0);
+#else
 	return (GetKeyState( fRightButton ? VK_RBUTTON : VK_LBUTTON ) < 0);
+#endif
 }
 
 

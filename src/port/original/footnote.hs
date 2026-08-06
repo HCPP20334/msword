@@ -11,8 +11,8 @@ typedef struct _CABINSERTFTN
 {
 	CABH cabh;
 	WORD sab;
-	BOOL fAuto;
 	CHAR **hstRef;
+	BOOL fAuto;
 } CABINSERTFTN;
 
 typedef CABINSERTFTN **HCABINSERTFTN;

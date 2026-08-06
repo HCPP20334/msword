@@ -107,6 +107,14 @@ typedef IB HUGE * HQ;
 
 /* for source compatibilty with Opus huge block manipulations */
 struct BPS HUGE *HpbpsIbp();
+#ifdef OPUS_X64
+/* Native replacement for FILEWINN.ASM.  This must be declared because an
+ * implicit-int call truncates the flat cache-page pointer on AMD64. */
+CHAR HUGE *HpOfBptbExt(int ibp);
+/* DEBUG.H remaps HpchGetPn calls to the translated native entry.  Declare
+ * that entry before the remap so C callers retain the full AMD64 pointer. */
+CHAR HUGE *N_HpchGetPn(int fn, int pn);
+#endif
 
 
 

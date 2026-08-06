@@ -2,7 +2,7 @@
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <assemblyIdentity version="0.1.0.0" processorArchitecture="amd64"
                     name="Microsoft.Opus.WordX64Port" type="win32"/>
-  <description>Microsoft Word for Windows x64 port</description>
+  <description>Microsoft Word for Windows x64 port by Justin Marshall</description>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls"

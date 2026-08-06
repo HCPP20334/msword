@@ -28,6 +28,9 @@ constexpr std::size_t kWordBytes = sizeof(Word);
 constexpr std::size_t kCabMinWords =
     (sizeof(CabHeader) + sizeof(Word)) / kWordBytes;
 constexpr std::size_t kPointerWords = sizeof(void*) / kWordBytes;
+constexpr std::size_t kHandleBaseWords =
+    (kCabMinWords + kPointerWords - 1) / kPointerWords * kPointerWords;
+constexpr std::size_t kHandleBaseIag = kHandleBaseWords - kCabMinWords;
 constexpr Word kNinch = 0xffff;
 
 std::byte* cab_bytes(const CabHandle cab) noexcept {
@@ -45,8 +48,9 @@ std::size_t cab_word_count(const CabHandle cab) noexcept {
 
 void*** handle_slot(const CabHandle cab, const Word argument_index) noexcept {
     auto* const header = cab_header(cab);
-    if (header == nullptr || argument_index >= header->handle_words ||
-        argument_index % kPointerWords != 0) {
+    if (header == nullptr || argument_index < kHandleBaseIag ||
+        argument_index >= kHandleBaseIag + header->handle_words ||
+        (argument_index - kHandleBaseIag) % kPointerWords != 0) {
         return nullptr;
     }
     return reinterpret_cast<void***>(
@@ -58,7 +62,8 @@ void clear_cab_data(const CabHandle cab) noexcept {
     if (header == nullptr) {
         return;
     }
-    for (Word index = 0; index < header->handle_words;
+    for (Word index = static_cast<Word>(kHandleBaseIag);
+         index < kHandleBaseIag + header->handle_words;
          index = static_cast<Word>(index + kPointerWords)) {
         void*** const slot = handle_slot(cab, index);
         if (slot != nullptr && *slot != nullptr) {
@@ -77,7 +82,8 @@ bool initialize_cab(const CabHandle cab, const Word initializer) noexcept {
     const std::size_t total_words = initializer & 0x00ffu;
     const std::size_t handle_count = initializer >> 8u;
     if (total_words < kCabMinWords || total_words > cab_word_count(cab) ||
-        handle_count * kPointerWords > total_words - kCabMinWords) {
+        kHandleBaseIag + handle_count * kPointerWords >
+            total_words - kCabMinWords) {
         return false;
     }
 
@@ -149,7 +155,7 @@ void copy_sz(const CabHandle cab, char* destination,
 extern "C" {
 
 CabHandle hcabDlgCur = nullptr;
-Word wRefDlgCur = 0;
+std::uintptr_t wRefDlgCur = 0;
 
 CabHandle HcabAlloc_sdm21(const Word initializer) {
     const std::size_t total_words = initializer & 0x00ffu;
@@ -193,7 +199,11 @@ void NinchCab(const CabHandle cab) {
     }
     clear_cab_data(cab);
     auto* words = reinterpret_cast<Word*>(cab_bytes(cab));
-    for (Word index = header->handle_words; index < header->simple_words;
+    const Word simple_first = header->handle_words == 0
+                                  ? 0
+                                  : static_cast<Word>(kHandleBaseIag +
+                                                      header->handle_words);
+    for (Word index = simple_first; index < header->simple_words;
          ++index) {
         words[kCabMinWords + index] = kNinch;
     }
@@ -312,13 +322,18 @@ CabHandle HcabDupeCab(const CabHandle source) {
     auto* const destination_header = cab_header(duplicate);
     auto* const source_words = reinterpret_cast<const Word*>(cab_bytes(source));
     auto* const destination_words = reinterpret_cast<Word*>(cab_bytes(duplicate));
-    for (Word index = source_header->handle_words;
+    const Word simple_first = source_header->handle_words == 0
+                                  ? 0
+                                  : static_cast<Word>(kHandleBaseIag +
+                                                      source_header->handle_words);
+    for (Word index = simple_first;
          index < source_header->simple_words; ++index) {
         destination_words[kCabMinWords + index] =
             source_words[kCabMinWords + index];
     }
 
-    for (Word index = 0; index < source_header->handle_words;
+    for (Word index = static_cast<Word>(kHandleBaseIag);
+         index < kHandleBaseIag + source_header->handle_words;
          index = static_cast<Word>(index + kPointerWords)) {
         void*** const source_slot = handle_slot(source, index);
         if (source_slot != nullptr && *source_slot != nullptr &&

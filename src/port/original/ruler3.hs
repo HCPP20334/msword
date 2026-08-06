@@ -9,6 +9,7 @@
 typedef struct _CABRULER3
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszStyle;
 } CABRULER3;
 

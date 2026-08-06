@@ -34,62 +34,6 @@ foreach(config Debug Release RelWithDebInfo MinSizeRel)
     set(CMAKE_COMPILE_PDB_OUTPUT_DIRECTORY_${config_upper} "${MSWORD_BUILD_ROOT}/pdb/${config}")
 endforeach()
 
-set(MSWORD_BOOTSTRAP_SOURCES
-    port/winword_x64.cpp
-    port/legacy_asm_port.cpp
-    port/legacy_asm_port.h
-    port/winword_x64.rc
-    port/winword.manifest
-)
-
-# This is a migration aid only. It is deliberately excluded from the default
-# build and may never claim the final WORD1.exe product name: that name is
-# reserved for the executable linked from the original Opus source graph.
-add_executable(WINWORD_BOOTSTRAP WIN32 EXCLUDE_FROM_ALL ${MSWORD_BOOTSTRAP_SOURCES})
-target_compile_features(WINWORD_BOOTSTRAP PRIVATE cxx_std_20)
-target_compile_definitions(WINWORD_BOOTSTRAP PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_include_directories(WINWORD_BOOTSTRAP PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/port")
-target_link_libraries(WINWORD_BOOTSTRAP PRIVATE
-    comctl32
-    comdlg32
-    gdi32
-    ole32
-    shell32
-    user32
-)
-
-if(MSVC)
-    target_compile_options(WINWORD_BOOTSTRAP PRIVATE /W4 /permissive- /utf-8 /EHsc /guard:cf)
-    # The application manifest is compiled as resource 1; disable MSVC's
-    # second auto-generated manifest to avoid a duplicate RT_MANIFEST entry.
-    target_link_options(WINWORD_BOOTSTRAP PRIVATE /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /MANIFEST:NO)
-    set_property(TARGET WINWORD_BOOTSTRAP PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-endif()
-
-set_target_properties(WINWORD_BOOTSTRAP PROPERTIES
-    OUTPUT_NAME "WINWORD_BOOTSTRAP"
-    RUNTIME_OUTPUT_DIRECTORY "${MSWORD_BUILD_ROOT}/bootstrap"
-    VS_GLOBAL_ROOTNAMESPACE "MicrosoftWordX64Port"
-    # The target uses only Windows system libraries. Disable Visual Studio's
-    # global vcpkg app-local hook so it does not invoke an unrelated pwsh.exe.
-    VS_GLOBAL_VcpkgApplocalDeps "false"
-)
-foreach(config Debug Release RelWithDebInfo MinSizeRel)
-    string(TOUPPER "${config}" config_upper)
-    set_target_properties(WINWORD_BOOTSTRAP PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${MSWORD_BUILD_ROOT}/bootstrap/${config}"
-    )
-endforeach()
-
-# The original assembly remains in the repository for behavioral reference,
-# but no .asm file is permitted to enter the native target.
-get_target_property(winword_sources WINWORD_BOOTSTRAP SOURCES)
-foreach(source IN LISTS winword_sources)
-    if(source MATCHES "\\.[aA][sS][mM]$")
-        message(FATAL_ERROR "Legacy assembly leaked into the x64 target: ${source}")
-    endif()
-endforeach()
-
 file(GLOB_RECURSE LEGACY_ASSEMBLY CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.asm")
 set(LEGACY_ASSEMBLY_RELATIVE)
 foreach(assembly_file IN LISTS LEGACY_ASSEMBLY)
@@ -99,23 +43,11 @@ foreach(assembly_file IN LISTS LEGACY_ASSEMBLY)
 endforeach()
 list(SORT LEGACY_ASSEMBLY_RELATIVE)
 
-# Extract the explicit source paths from the C++ disposition table and compare
-# names, not merely counts. Removing one module and adding another cannot pass.
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/port/legacy_asm_port.cpp" ASM_PORT_SOURCE)
-string(REGEX MATCHALL "AssemblyPortEntry\\{\"[^\"]+\\.asm\"" ASM_PORT_ROWS "${ASM_PORT_SOURCE}")
-set(ASM_PORT_PATHS)
-foreach(port_row IN LISTS ASM_PORT_ROWS)
-    string(REGEX REPLACE "AssemblyPortEntry\\{\"([^\"]+)\"" "\\1" port_path "${port_row}")
-    list(APPEND ASM_PORT_PATHS "${port_path}")
-endforeach()
-list(SORT ASM_PORT_PATHS)
-
 list(LENGTH LEGACY_ASSEMBLY_RELATIVE LEGACY_ASSEMBLY_COUNT)
-if(NOT LEGACY_ASSEMBLY_COUNT EQUAL 59 OR
-   NOT "${LEGACY_ASSEMBLY_RELATIVE}" STREQUAL "${ASM_PORT_PATHS}")
+if(NOT LEGACY_ASSEMBLY_COUNT EQUAL 59)
     message(FATAL_ERROR
-        "The assembly-port manifest does not exactly match the legacy source tree "
-        "(${LEGACY_ASSEMBLY_COUNT} modules found). Update port/legacy_asm_port.cpp."
+        "The original assembly reference tree changed "
+        "(${LEGACY_ASSEMBLY_COUNT} modules found; expected 59). Review the x64 translations."
     )
 endif()
 
@@ -181,6 +113,35 @@ set_target_properties(opus_mkcmd_tool PROPERTIES
 foreach(config Debug Release RelWithDebInfo MinSizeRel)
     string(TOUPPER "${config}" config_upper)
     set_target_properties(opus_mkcmd_tool PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${MSWORD_BUILD_ROOT}/tools/${config}"
+    )
+endforeach()
+
+add_executable(opus_cabi_tool EXCLUDE_FROM_ALL
+    port/tools/opus_cabi_tool.cpp
+)
+target_compile_features(opus_cabi_tool PRIVATE cxx_std_20)
+target_compile_definitions(opus_cabi_tool PRIVATE
+    WIN WIN23 CRLF NONATIVE OPUS_X64 NOMINMAX
+)
+target_include_directories(opus_cabi_tool PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/original"
+    "${CMAKE_CURRENT_SOURCE_DIR}/port/original"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Opus/lib"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Opus"
+)
+if(MSVC)
+    target_compile_options(opus_cabi_tool PRIVATE
+        /J /W3 /wd4005 /permissive-)
+endif()
+set_target_properties(opus_cabi_tool PROPERTIES
+    FOLDER "Original Opus x64/build tools"
+    RUNTIME_OUTPUT_DIRECTORY "${MSWORD_BUILD_ROOT}/tools"
+    VS_GLOBAL_VcpkgApplocalDeps "false"
+)
+foreach(config Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${config}" config_upper)
+    set_target_properties(opus_cabi_tool PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${MSWORD_BUILD_ROOT}/tools/${config}"
     )
 endforeach()
@@ -353,6 +314,18 @@ set(OPUS_GENERATED_COMMAND_FILES
     "${OPUS_GENERATED_COMMAND_DIR}/opuscmd.asm"
     "${OPUS_GENERATED_COMMAND_DIR}/opuscmd_native.inc"
 )
+file(GLOB OPUS_RECONSTRUCTED_DIALOG_HEADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/port/original/*.hs")
+set(OPUS_GENERATED_CABI_DIR "${OPUS_GENERATED_COMMAND_DIR}/cabi")
+set(OPUS_GENERATED_CABI_OPEN "${OPUS_GENERATED_CABI_DIR}/open.hs")
+add_custom_command(
+    OUTPUT "${OPUS_GENERATED_CABI_OPEN}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${OPUS_GENERATED_CABI_DIR}"
+    COMMAND "$<TARGET_FILE:opus_cabi_tool>" "${OPUS_GENERATED_CABI_DIR}"
+    DEPENDS opus_cabi_tool ${OPUS_RECONSTRUCTED_DIALOG_HEADERS}
+    COMMENT "Computing native SDM CAB initializers"
+    VERBATIM
+)
 add_custom_command(
     OUTPUT ${OPUS_GENERATED_COMMAND_FILES}
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -368,7 +341,8 @@ add_custom_command(
         "${CMAKE_CURRENT_SOURCE_DIR}/Opus/resource/ibcm.rel"
         "${OPUS_GENERATED_COMMAND_DIR}/IBCM.H"
     COMMAND "$<TARGET_FILE:opus_mkcmd_tool>"
-        -T@13 -s../../../src/Opus/dlg/ opuscmd keys menus
+        -T@13 -s../../../src/Opus/dlg/ -bcabi/
+        opuscmd keys menus
     COMMAND "${CMAKE_COMMAND}"
         -DINPUT=${OPUS_GENERATED_COMMAND_DIR}/MENUHELP.TXT
         -DOUTPUT=${OPUS_GENERATED_COMMAND_DIR}/menuhelp.h
@@ -380,6 +354,8 @@ add_custom_command(
         Opus/resource/menus.cmd
         Opus/resource/ibcm.rel
         Opus/dlg/elx.txt
+        "${OPUS_GENERATED_CABI_OPEN}"
+        ${OPUS_RECONSTRUCTED_DIALOG_HEADERS}
         cmake/GenerateMenuHelpHeader.cmake
     WORKING_DIRECTORY "${OPUS_GENERATED_COMMAND_DIR}"
     COMMENT "Regenerating original Opus command tables with MKCMD"
@@ -893,6 +869,7 @@ endif()
 set_target_properties(WORD1 PROPERTIES
     FOLDER "Original Opus x64/product"
     OUTPUT_NAME "${MSWORD_PRODUCT_OUTPUT_NAME}"
+    VS_DEBUGGER_WORKING_DIRECTORY "${MSWORD_BIN_ROOT}"
     VS_GLOBAL_VcpkgApplocalDeps "false"
 )
 
@@ -965,10 +942,49 @@ foreach(config Debug Release RelWithDebInfo MinSizeRel)
     )
 endforeach()
 
+add_executable(opus_word1_ui_test
+    port/original/opus_word1_ui_test.cpp
+)
+add_dependencies(opus_word1_ui_test WORD1)
+target_compile_features(opus_word1_ui_test PRIVATE cxx_std_20)
+target_compile_definitions(opus_word1_ui_test PRIVATE NOMINMAX UNICODE _UNICODE)
+target_link_libraries(opus_word1_ui_test PRIVATE user32 gdi32)
+if(MSVC)
+    target_compile_options(opus_word1_ui_test PRIVATE /W4 /utf-8)
+endif()
+set_target_properties(opus_word1_ui_test PROPERTIES
+    FOLDER "Original Opus x64/tests"
+    RUNTIME_OUTPUT_DIRECTORY "${MSWORD_BUILD_ROOT}/tests"
+    VS_GLOBAL_VcpkgApplocalDeps "false"
+)
+foreach(config Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${config}" config_upper)
+    set_target_properties(opus_word1_ui_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${MSWORD_BUILD_ROOT}/tests/${config}"
+    )
+endforeach()
+
 enable_testing()
 add_test(NAME opus_original_strtbl_test COMMAND $<TARGET_FILE:opus_original_strtbl_test>)
 add_test(NAME opus_x64_runtime_test COMMAND $<TARGET_FILE:opus_x64_runtime_test>)
 add_test(NAME opus_original_sttb_test COMMAND $<TARGET_FILE:opus_original_sttb_test>)
 add_test(NAME opus_original_plc_test COMMAND $<TARGET_FILE:opus_original_plc_test>)
+add_test(NAME opus_sdm_cab_test COMMAND $<TARGET_FILE:opus_sdm_cab_test>)
 add_test(NAME opus_original_command_test COMMAND $<TARGET_FILE:opus_original_command_test>)
 add_test(NAME word1_port_smoke_test COMMAND $<TARGET_FILE:WORD1> --self-test)
+add_test(NAME opus_word1_ui_test
+    COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1>
+)
+set_tests_properties(opus_word1_ui_test PROPERTIES TIMEOUT 20)
+add_test(NAME opus_word1_typing_test
+    COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --typing
+)
+set_tests_properties(opus_word1_typing_test PROPERTIES TIMEOUT 20)
+add_test(NAME opus_word1_interaction_test
+    COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --interaction
+)
+set_tests_properties(opus_word1_interaction_test PROPERTIES TIMEOUT 25)
+add_test(NAME opus_word1_selection_test
+    COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --selection
+)
+set_tests_properties(opus_word1_selection_test PROPERTIES TIMEOUT 20)

@@ -13,7 +13,6 @@
 #define tmcUnassignKey (tmcUserMin + 9)
 #define tmcDescKey     (tmcUserMin + 10)
 
-#pragma pack(push, 2)
 typedef struct _CABCHANGEKEYS
 {
 	CABH cabh;
@@ -22,7 +21,6 @@ typedef struct _CABCHANGEKEYS
 	unsigned uKeyList;
 	int iContext;
 } CABCHANGEKEYS;
-#pragma pack(pop)
 
 typedef CABCHANGEKEYS **HCABCHANGEKEYS;
 #define cabiCABCHANGEKEYS Cabi((sizeof(CABCHANGEKEYS) + sizeof(WORD) - 1) / sizeof(WORD), 1)

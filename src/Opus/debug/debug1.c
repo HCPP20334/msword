@@ -374,7 +374,7 @@ DumpGrpchr()
 			return;
 			}
 		CommSz( SzShared( "\r\n" ) );
-		pchr = ((char *)pchr) + pchr->chrm;
+		pchr = ((char *)pchr) + CbFromChrm(pchr->chrm);
 		}
 }
 

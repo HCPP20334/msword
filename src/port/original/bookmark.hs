@@ -7,6 +7,7 @@
 typedef struct _CABINSBOOKMARK
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszBkmkName;
 } CABINSBOOKMARK;
 

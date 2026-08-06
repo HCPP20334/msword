@@ -11,7 +11,6 @@
 #define tmcIndexBlank      (tmcUserMin + 3)
 #define tmcIndexLetter     (tmcUserMin + 4)
 
-#pragma pack(push, 2)
 typedef struct _CABINDEX
 {
 	CABH cabh;
@@ -20,7 +19,6 @@ typedef struct _CABINDEX
 	int iHeading;
 	BOOL fReplace;
 } CABINDEX;
-#pragma pack(pop)
 
 typedef CABINDEX **HCABINDEX;
 #define cabiCABINDEX Cabi((sizeof(CABINDEX) + sizeof(WORD) - 1) / sizeof(WORD), 0)

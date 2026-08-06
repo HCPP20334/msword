@@ -7,6 +7,7 @@
 typedef struct _CABUSERNAME
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszName;
 	CHAR **hszInitials;
 } CABUSERNAME;

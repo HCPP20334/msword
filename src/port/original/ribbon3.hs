@@ -12,6 +12,7 @@
 typedef struct _CABRIBBON3
 {
 	CABH cabh;
+	WORD sab;
 	int ftc;
 	int hps;
 } CABRIBBON3;

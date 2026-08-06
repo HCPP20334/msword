@@ -13,7 +13,6 @@
 #define tmcCatDelete  (tmcUserMin + 7)
 #define tmcCatSummary (tmcUserMin + 8)
 
-#pragma pack(push, 2)
 typedef struct _CABCATALOG
 {
 	CABH cabh;
@@ -34,7 +33,6 @@ typedef struct _CABCATALOG
 	BOOL fCatSrhMatchCase;
 	BOOL fCatSrhRedo;
 } CABCATALOG;
-#pragma pack(pop)
 
 typedef CABCATALOG **HCABCATALOG;
 #define cabiCABCATALOG Cabi((sizeof(CABCATALOG) + sizeof(WORD) - 1) / sizeof(WORD), 8)

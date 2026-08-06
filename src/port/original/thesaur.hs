@@ -10,7 +10,6 @@
 #define tmcPartOfSpeech    (tmcUserMin + 6)
 #define tmcDefinition      (tmcUserMin + 7)
 
-#pragma pack(push, 2)
 typedef struct _CABTHESAURUS
 {
 	CABH cabh;
@@ -19,7 +18,6 @@ typedef struct _CABTHESAURUS
 	int uSynList;
 	int uDefList;
 } CABTHESAURUS;
-#pragma pack(pop)
 
 typedef CABTHESAURUS **HCABTHESAURUS;
 #define cabiCABTHESAURUS Cabi((sizeof(CABTHESAURUS) + sizeof(WORD) - 1) / sizeof(WORD), 1)

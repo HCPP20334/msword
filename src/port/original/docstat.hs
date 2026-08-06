@@ -19,6 +19,7 @@
 typedef struct _CABDOCSTAT
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszFName;
 	CHAR **hszDir;
 	CHAR **hszDOT;

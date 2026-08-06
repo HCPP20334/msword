@@ -227,11 +227,15 @@ int n1, n2;
 
 
 /* %%Function:AppWndProcRare %%Owner:chic */
+#ifdef OPUS_X64
+LRESULT AppWndProcRare(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+#else
 long AppWndProcRare(hwnd, message, wParam, lParam)
 HWND hwnd;
 int message;
 WORD wParam;
 LONG lParam;
+#endif
 {
 	HDLG hdlg;
 	LPPOINT rgpt;
@@ -328,7 +332,11 @@ LONG lParam;
 		EnsureFocusInPane();
 
 		if (vfRecording && fRecordMove)
+#ifdef OPUS_X64
+			RecordAppMove((short) LOWORD(lParam), (short) HIWORD(lParam));
+#else
 			RecordAppMove(LOWORD(lParam), HIWORD(lParam));
+#endif
 		fRecordMove = fFalse;
 
 defproc:    
@@ -449,7 +457,11 @@ defproc:
             InvalidateRect(wParam, (LPRECT) NULL, fTrue);
             break;
             }
+#ifdef OPUS_X64
+		PaintClipboard((HWND) wParam, (HANDLE) lParam);
+#else
 		PaintClipboard( wParam, LOWORD(lParam) );
+#endif
 		break;
 
 	case WM_VSCROLLCLIPBOARD:
@@ -484,7 +496,11 @@ defproc:
 	    if (vrf.fInDisplayFli)
 		    break;
 
+#ifdef OPUS_X64
+		SizeClipboard((HWND) wParam, (HANDLE) lParam);
+#else
 		SizeClipboard( wParam, LOWORD(lParam) );
+#endif
 		break;
 
 	case WM_ASKCBFORMATNAME:

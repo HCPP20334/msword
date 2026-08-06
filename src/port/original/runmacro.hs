@@ -9,6 +9,7 @@
 typedef struct _CABRUNMACRO
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszName;
 	BOOL fShowAll;
 } CABRUNMACRO;

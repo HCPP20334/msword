@@ -10,6 +10,7 @@
 typedef struct _CABOPEN
 {
 	CABH cabh;
+	WORD sab;
 	CHAR **hszFile;
 	int iDirectory;
 	BOOL fReadOnly;

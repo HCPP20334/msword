@@ -23,6 +23,8 @@
 typedef struct _CABDOCUMENT
 {
 	CABH cabh;
+	WORD sab;
+	CHAR **hszTemplate;
 	unsigned uDocPageWidth;
 	unsigned uDocPageHeight;
 	unsigned uDocDefTabs;
@@ -35,7 +37,6 @@ typedef struct _CABDOCUMENT
 	int iFN;
 	int iFNStartAt;
 	BOOL fFNRestart;
-	CHAR **hszTemplate;
 	BOOL fWidowControl;
 } CABDOCUMENT;
 

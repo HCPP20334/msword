@@ -155,7 +155,11 @@ CMB * pcmb;
 
 	SetBytes(&dli, 0, sizeof (DLI));
 	dli.fdlg = fdlgModal | fdlgFedt;
+#ifdef OPUS_X64
+	dli.wRef = (UINT_PTR)pcmb;
+#else
 	dli.wRef = (WORD) pcmb;
+#endif
 
 	/* this returns from this func if there is not enough stack for AllocA below */
 	ReturnOnNoStack(cb, tmcError, fTrue);
@@ -771,7 +775,13 @@ SuccessCCP:
 		return(1L);
 
 	case EM_SETSEL:
+#ifdef OPUS_X64
+		/* Win32 and later pass the start in wParam and the end in lParam.
+		 * The Win16 edit message packed both 16-bit values into lParam. */
+		FedtSetSel(hfedt, (int) wParam, (int) lParam);
+#else
 		FedtSetSel(hfedt, LOWORD(lParam), HIWORD(lParam));
+#endif
 		FedtReleaseDC(hfedt);
 		break;
 

@@ -26,9 +26,9 @@ typedef struct _CABDEFINESTYLE
 	CHAR **hszDSStyle;
 	CHAR **hszDSBasedOn;
 	CHAR **hszDSNext;
-	BOOL fTemplate;
 	CHAR **hszDSNewName;
 	CHAR **hszMergeStyle;
+	BOOL fTemplate;
 	unsigned uSource;
 } CABDEFINESTYLE;
 

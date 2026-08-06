@@ -1,2 +1,7 @@
 #pragma once
-static DLG_CONST DLT dltOpen = { 0 };
+/* Regenerated from Opus/dlg/open.des. */
+extern BOOL FDlgOpen(DLM, TMC, WORD, WORD, WORD);
+static DLG_CONST DLT dltOpen = {
+    { 8, 24, 206, 104 }, IDDOpen, tmcOpenFileName, FDlgOpen,
+    11, bdrSysMenu, { 0 }
+};

@@ -24,6 +24,7 @@ typedef struct _CABPARALOOKS
 {
 	CABH cabh;
 	WORD sab;
+	CHAR **hszStyle;
 	int iJustify;
 	int wParLeftIn;
 	int wParRightIn;
@@ -31,7 +32,6 @@ typedef struct _CABPARALOOKS
 	int wParDyaBefore;
 	int wParDyaAfter;
 	int wParDyaLine;
-	CHAR **hszStyle;
 	BOOL fParKeepLT;
 	BOOL fParKeepNP;
 	int iBrcp;

@@ -13,7 +13,6 @@
 #define tmcResetMenu    (tmcUserMin + 9)
 #define tmcDescMenu     (tmcUserMin + 10)
 
-#pragma pack(push, 2)
 typedef struct _CABASSIGNTOMENU
 {
 	CABH cabh;
@@ -23,7 +22,6 @@ typedef struct _CABASSIGNTOMENU
 	CHAR **hszTitle;
 	int iContext;
 } CABASSIGNTOMENU;
-#pragma pack(pop)
 
 typedef CABASSIGNTOMENU **HCABASSIGNTOMENU;
 #define cabiCABASSIGNTOMENU Cabi((sizeof(CABASSIGNTOMENU) + sizeof(WORD) - 1) / sizeof(WORD), 3)

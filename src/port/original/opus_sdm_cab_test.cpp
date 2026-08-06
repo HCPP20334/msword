@@ -22,8 +22,12 @@ CabHandle HcabDupeCab(CabHandle);
 
 constexpr Word kCabMinWords = 3;
 constexpr Word kPointerWords = sizeof(void*) / sizeof(Word);
+constexpr Word kHandleBaseIag =
+    ((kCabMinWords + kPointerWords - 1) / kPointerWords * kPointerWords) -
+    kCabMinWords;
 constexpr Word kHandleCount = 2;
-constexpr Word kArgumentWords = kHandleCount * kPointerWords + 2;
+constexpr Word kArgumentWords =
+    kHandleBaseIag + kHandleCount * kPointerWords + 2;
 constexpr Word kTotalWords = kCabMinWords + kArgumentWords;
 constexpr Word kInitializer = kTotalWords | (kHandleCount << 8);
 
@@ -44,43 +48,46 @@ int main() {
         return fail(__LINE__);
     }
 
-    if (!FSetCabSz(cab, "Alpha", 0)) {
+    if (!FSetCabSz(cab, "Alpha", kHandleBaseIag)) {
         return fail(__LINE__);
     }
     const unsigned char counted[] = {4, 'B', 'e', 't', 'a'};
-    if (!FSetCabSt(cab, counted, kPointerWords)) {
+    if (!FSetCabSt(cab, counted, kHandleBaseIag + kPointerWords)) {
         return fail(__LINE__);
     }
 
     char sz[16]{};
-    GetCabSz(cab, sz, sizeof(sz), 0);
+    GetCabSz(cab, sz, sizeof(sz), kHandleBaseIag);
     if (std::strcmp(sz, "Alpha") != 0) {
         return fail(__LINE__);
     }
     unsigned char stz[16]{};
-    GetCabStz(cab, stz, sizeof(stz), kPointerWords);
+    GetCabStz(cab, stz, sizeof(stz), kHandleBaseIag + kPointerWords);
     if (stz[0] != 4 || std::memcmp(stz + 1, "Beta", 5) != 0) {
         return fail(__LINE__);
     }
 
     auto* mutable_words = static_cast<Word*>(OpusDerefH(cab));
-    mutable_words[kCabMinWords + kHandleCount * kPointerWords] = 42;
+    mutable_words[kCabMinWords + kHandleBaseIag +
+                  kHandleCount * kPointerWords] = 42;
     CabHandle const duplicate = HcabDupeCab(cab);
     if (duplicate == nullptr) {
         return fail(__LINE__);
     }
-    GetCabSz(duplicate, sz, sizeof(sz), 0);
+    GetCabSz(duplicate, sz, sizeof(sz), kHandleBaseIag);
     if (std::strcmp(sz, "Alpha") != 0 ||
         static_cast<Word*>(OpusDerefH(duplicate))
-                [kCabMinWords + kHandleCount * kPointerWords] != 42) {
+                [kCabMinWords + kHandleBaseIag +
+                 kHandleCount * kPointerWords] != 42) {
         return fail(__LINE__);
     }
 
     NinchCab(cab);
-    GetCabSz(cab, sz, sizeof(sz), 0);
+    GetCabSz(cab, sz, sizeof(sz), kHandleBaseIag);
     mutable_words = static_cast<Word*>(OpusDerefH(cab));
     if (sz[0] != '\0' ||
-        mutable_words[kCabMinWords + kHandleCount * kPointerWords] !=
+        mutable_words[kCabMinWords + kHandleBaseIag +
+                      kHandleCount * kPointerWords] !=
             0xffffu) {
         return fail(__LINE__);
     }

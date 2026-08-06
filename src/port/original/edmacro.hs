@@ -17,10 +17,10 @@ typedef struct _CABEDMACRO
 	CABH cabh;
 	WORD sab;
 	CHAR **hszName;
-	int iContext;
-	BOOL fShowAll;
 	CHAR **hszDesc;
 	CHAR **hszNewName;
+	int iContext;
+	BOOL fShowAll;
 } CABEDMACRO;
 
 typedef CABEDMACRO **HCABEDMACRO;
