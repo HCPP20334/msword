@@ -992,3 +992,11 @@ add_test(NAME opus_word1_font_typing_test
     COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --font-typing
 )
 set_tests_properties(opus_word1_font_typing_test PROPERTIES TIMEOUT 20)
+add_test(NAME opus_word1_about_test
+    COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --about
+)
+set_tests_properties(opus_word1_about_test PROPERTIES TIMEOUT 20)
+add_test(NAME opus_word1_save_as_test
+    COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --save-as
+)
+set_tests_properties(opus_word1_save_as_test PROPERTIES TIMEOUT 20)

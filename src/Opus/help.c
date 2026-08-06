@@ -955,12 +955,17 @@ CMB *pcmb;
 CMD CmdAbout(pcmb)
 CMB *pcmb;
 {
+#ifdef OPUS_X64
+	SetPropA(vhwndApp, "OpusX64AboutStage", (HANDLE)(INT_PTR)1);
+#endif
 	if (FCmdFillCab())
 		{
 		extern BOOL f8087;
 		long	l;
 		char	st[cchMaxSz];
+#ifndef OPUS_X64
 		long (FAR PASCAL *lpfn)();
+#endif
 
 		/* values come from version.h */
 		FSetCabSz(pcmb->hcab, szApp, 
@@ -969,8 +974,27 @@ CMB *pcmb;
 				Iag(CABABOUT, hszAboutVersion));
 		FSetCabSz(pcmb->hcab, SzShared(szCopyrightDef), 
 				Iag(CABABOUT, hszAboutCopyright));
+#ifdef OPUS_X64
+		SetPropA(vhwndApp, "OpusX64AboutStage", (HANDLE)(INT_PTR)2);
+#endif
 
 
+#ifdef OPUS_X64
+		/* Win16 KERNEL ordinal 169 was GetFreeSpace.  It does not exist on
+		 * Win64; use the native system-memory API for the same About field. */
+			{
+			MEMORYSTATUSEX memoryStatus;
+			ULONGLONG freeKb;
+			memoryStatus.dwLength = sizeof(memoryStatus);
+			if (GlobalMemoryStatusEx(&memoryStatus))
+				{
+				freeKb = memoryStatus.ullAvailPhys >> 10;
+				l = (long) min(freeKb, 0x7fffffffULL);
+				}
+			else
+				l = GlobalCompact(0L) >> 10;
+			}
+#else
 		if (vwWinVersion >= 0x0300 && 
 				(lpfn = GetProcAddress(GetModuleHandle(SzFrame("KERNEL")),
 				MAKEINTRESOURCE(idoGetFreeSpace))) != NULL)
@@ -978,6 +1002,7 @@ CMB *pcmb;
 			l = (*lpfn)(0) >> 10;
 		else
 			l = GlobalCompact(0L) >> 10;
+#endif
 
 		BuildStMstRgw(mstAboutKB, &l, st, cchMaxSz, hNil);
 		FSetCabSt(pcmb->hcab, st, Iag(CABABOUT, hszAboutMem));
@@ -998,6 +1023,9 @@ CMB *pcmb;
 			if (!fInitialized)
 				InitMath();
 			}
+#ifdef OPUS_X64
+		SetPropA(vhwndApp, "OpusX64AboutStage", (HANDLE)(INT_PTR)3);
+#endif
 
 		FSetCabSz(pcmb->hcab, f8087 ? SzSharedKey("Present", Present) : 
 				szNone, Iag(CABABOUT, hszAboutMath));
@@ -1013,9 +1041,17 @@ CMB *pcmb;
 	if (pcmb->fDialog || pcmb->fAction)
 		{
 		char	dlt[sizeof(dltAbout)];
+		TMC tmc;
 
 		BltDlt(dltAbout, dlt);
-		if (TmcOurDoDlg(dlt, pcmb) == tmcError)
+#ifdef OPUS_X64
+		SetPropA(vhwndApp, "OpusX64AboutStage", (HANDLE)(INT_PTR)4);
+#endif
+		tmc = TmcOurDoDlg(dlt, pcmb);
+#ifdef OPUS_X64
+		SetPropA(vhwndApp, "OpusX64AboutStage", (HANDLE)(INT_PTR)(100 + tmc));
+#endif
+		if (tmc == tmcError)
 			{
 			return cmdError;
 			}

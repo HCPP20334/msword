@@ -131,9 +131,11 @@ constexpr Word kDlmDialogClick = 0x0012;
 constexpr UINT kWmCommitRibbonSelection = WM_APP + 0x352;
 constexpr Word kIddNewDoc = 2;
 constexpr Word kIddOpen = 3;
+constexpr Word kIddSaveAs = 4;
 constexpr Word kIddCharacter = 16;
 constexpr Word kIddApplyStyle = 23;
 constexpr Word kIddDefineStyle = 24;
+constexpr Word kIddAbout = 44;
 constexpr Word kCxtRibbonIconBar = 0x8005;
 constexpr Word kCxtRulerIconBar = 0x8006;
 constexpr Tmc kTmcOk = 1;
@@ -173,6 +175,16 @@ constexpr Tmc kTmcOpenFileList = 0x0401;
 constexpr Tmc kTmcOpenFileDir = 0x0402;
 constexpr Tmc kTmcOpenCatalog = 0x0403;
 constexpr Tmc kTmcOpenReadOnly = 0x0404;
+constexpr Tmc kTmcSaveFile = kTmcUserMin;
+constexpr Tmc kTmcSaveOptions = kTmcUserMin + 1;
+constexpr Tmc kTmcSaveDirectoryText = kTmcUserMin + 2;
+constexpr Tmc kTmcSaveDirectoryList = kTmcUserMin + 3;
+constexpr Tmc kTmcSaveDirectory = kTmcUserMin + 4;
+constexpr Tmc kTmcSaveFormatPrompt = kTmcUserMin + 5;
+constexpr Tmc kTmcSaveFormat = kTmcUserMin + 6;
+constexpr Tmc kTmcSaveQuick = kTmcUserMin + 7;
+constexpr Tmc kTmcSaveBackup = kTmcUserMin + 8;
+constexpr Tmc kTmcSaveLockAnnotations = kTmcUserMin + 9;
 constexpr Word kOpenFileNameIag = 1;
 constexpr std::size_t kOpenCabBytes = 24;
 constexpr std::size_t kOpenReadOnlyOffset = 20;
@@ -246,6 +258,7 @@ ATOM ensure_native_dialog_class() {
 HWND create_dialog_host(const DialogState& dialog, const Dli* initializer) {
     if (dialog.modal &&
         (dialog.hid == kIddOpen || dialog.hid == kIddNewDoc ||
+         dialog.hid == kIddSaveAs || dialog.hid == kIddAbout ||
          dialog.hid == kIddCharacter || dialog.hid == kIddApplyStyle ||
          dialog.hid == kIddDefineStyle)) {
         if (ensure_native_dialog_class() == 0) {
@@ -291,6 +304,9 @@ HWND create_dialog_host(const DialogState& dialog, const Dli* initializer) {
             case kIddNewDoc:
                 caption = "New";
                 break;
+            case kIddSaveAs:
+                caption = "Save As";
+                break;
             case kIddCharacter:
                 caption = "Character";
                 break;
@@ -299,6 +315,9 @@ HWND create_dialog_host(const DialogState& dialog, const Dli* initializer) {
                 break;
             case kIddDefineStyle:
                 caption = "Define Style";
+                break;
+            case kIddAbout:
+                caption = "About Microsoft Word";
                 break;
         }
         return CreateWindowExA(
@@ -781,6 +800,247 @@ void materialize_open_template(DialogState& dialog) {
     dialog.caption = "Open";
     dialog.native_modal = true;
     read_open_cab(dialog);
+}
+
+std::string read_cab_string(const DialogState& dialog, const Word iag) {
+    char buffer[1024] = {};
+    if (dialog.cab != nullptr) {
+        GetCabSz(dialog.cab, buffer, static_cast<Word>(sizeof(buffer)), iag);
+    }
+    return buffer;
+}
+
+void materialize_about_template(DialogState& dialog) {
+    if (dialog.hid != kIddAbout || dialog.window == nullptr) {
+        return;
+    }
+
+    const auto static_from_cab = [&dialog](const Word iag, const Rec& rec,
+                                           const DWORD alignment) {
+        const std::string text = read_cab_string(dialog, iag);
+        create_untracked_control(dialog, "STATIC", text.c_str(), rec,
+                                 alignment);
+    };
+    static_from_cab(1, {4, 5, 192, 9}, SS_CENTER);
+    static_from_cab(2, {4, 22, 192, 9}, SS_CENTER);
+    static_from_cab(3, {4, 34, 192, 9}, SS_CENTER);
+    create_native_control(dialog, kTmcOk, "BUTTON", "OK",
+                          {84, 48, 34, 14},
+                          WS_TABSTOP | BS_DEFPUSHBUTTON);
+    create_untracked_control(dialog, "STATIC", "", {0, 64, 205, 4},
+                             SS_ETCHEDHORZ);
+    create_untracked_control(dialog, "STATIC", "Conventional Memory:",
+                             {5, 74, 110, 9}, SS_RIGHT);
+    create_untracked_control(dialog, "STATIC", "Expanded Memory:",
+                             {5, 83, 110, 9}, SS_RIGHT);
+    create_untracked_control(dialog, "STATIC", "Math Co-processor:",
+                             {5, 92, 110, 9}, SS_RIGHT);
+    create_untracked_control(dialog, "STATIC", "Disk Space:",
+                             {5, 101, 110, 9}, SS_RIGHT);
+    static_from_cab(4, {120, 74, 76, 9}, SS_LEFT);
+    static_from_cab(5, {120, 83, 76, 9}, SS_LEFT);
+    static_from_cab(6, {120, 92, 76, 9}, SS_LEFT);
+    static_from_cab(7, {120, 101, 76, 9}, SS_LEFT);
+    dialog.caption = "About Microsoft Word";
+    dialog.native_modal = true;
+}
+
+struct CabSaveNative {
+    Word simple_words;
+    Word handle_words;
+    Word sab;
+    Word alignment;
+    char** file_name;
+    int directory_list;
+    int format;
+    int quick_save;
+    int backup;
+    int lock_annotations;
+    int options;
+};
+
+CabSaveNative* save_cab(DialogState& dialog) {
+    if (dialog.cab == nullptr || *dialog.cab == nullptr ||
+        OpusCbOfH(dialog.cab) < sizeof(CabSaveNative)) {
+        return nullptr;
+    }
+    return static_cast<CabSaveNative*>(*dialog.cab);
+}
+
+void set_save_check(DialogState& dialog, const Tmc tmc, const bool checked) {
+    auto& state = dialog.controls[tmc];
+    state.value = checked;
+    if (state.window != nullptr && IsWindow(state.window)) {
+        SendMessageA(state.window, BM_SETCHECK,
+                     checked ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+}
+
+void populate_save_directories(DialogState& dialog) {
+    char directory[32768] = {};
+    if (dialog.current_directory.empty()) {
+        GetCurrentDirectoryA(static_cast<DWORD>(sizeof(directory)), directory);
+        dialog.current_directory = directory;
+    }
+
+    auto& list = dialog.controls[kTmcSaveDirectoryList];
+    list.entries.clear();
+    if (list.window != nullptr) {
+        SendMessageA(list.window, LB_RESETCONTENT, 0, 0);
+    }
+
+    char parent[32768] = {};
+    const std::string parent_spec = join_path(dialog.current_directory, "..");
+    if (GetFullPathNameA(parent_spec.c_str(),
+                         static_cast<DWORD>(sizeof(parent)), parent,
+                         nullptr) != 0 &&
+        _stricmp(parent, dialog.current_directory.c_str()) != 0) {
+        add_native_list_entry(dialog, kTmcSaveDirectoryList, "[..]");
+    }
+
+    WIN32_FIND_DATAA find_data{};
+    HANDLE find = FindFirstFileA(
+        join_path(dialog.current_directory, "*.*").c_str(), &find_data);
+    if (find != INVALID_HANDLE_VALUE) {
+        do {
+            if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+                std::strcmp(find_data.cFileName, ".") != 0 &&
+                std::strcmp(find_data.cFileName, "..") != 0) {
+                add_native_list_entry(
+                    dialog, kTmcSaveDirectoryList,
+                    "[" + std::string(find_data.cFileName) + "]");
+            }
+        } while (FindNextFileA(find, &find_data));
+        FindClose(find);
+    }
+
+    auto& label = dialog.controls[kTmcSaveDirectory];
+    label.text = dialog.current_directory;
+    if (label.window != nullptr) {
+        SetWindowTextA(label.window, label.text.c_str());
+    }
+}
+
+void set_save_options_visible(DialogState& dialog, const bool visible) {
+    const Tmc option_controls[] = {
+        kTmcSaveFormatPrompt, kTmcSaveFormat, kTmcSaveQuick,
+        kTmcSaveBackup, kTmcSaveLockAnnotations};
+    for (const Tmc tmc : option_controls) {
+        auto found = dialog.controls.find(tmc);
+        if (found == dialog.controls.end()) {
+            continue;
+        }
+        found->second.visible = visible;
+        if (found->second.window != nullptr) {
+            ShowWindow(found->second.window, visible ? SW_SHOWNA : SW_HIDE);
+        }
+    }
+    if (dialog.window == nullptr || !IsWindow(dialog.window)) {
+        return;
+    }
+    RECT client{0, 0, scaled_x(150), scaled_y(visible ? 157 : 102)};
+    const DWORD style = static_cast<DWORD>(GetWindowLongPtrA(
+        dialog.window, GWL_STYLE));
+    const DWORD extended_style = static_cast<DWORD>(GetWindowLongPtrA(
+        dialog.window, GWL_EXSTYLE));
+    AdjustWindowRectEx(&client, style, false, extended_style);
+    SetWindowPos(dialog.window, nullptr, 0, 0,
+                 client.right - client.left, client.bottom - client.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void read_save_cab(DialogState& dialog) {
+    auto& edit = dialog.controls[kTmcSaveFile];
+    edit.text = read_cab_string(dialog, 1);
+    if (edit.window != nullptr) {
+        SetWindowTextA(edit.window, edit.text.c_str());
+    }
+
+    if (auto* cab = save_cab(dialog); cab != nullptr) {
+        set_save_check(dialog, kTmcSaveQuick, cab->quick_save != 0);
+        set_save_check(dialog, kTmcSaveBackup, cab->backup != 0);
+        set_save_check(dialog, kTmcSaveLockAnnotations,
+                       cab->lock_annotations != 0);
+        auto& format = dialog.controls[kTmcSaveFormat];
+        format.value = static_cast<Word>(cab->format);
+        const std::string entry = "Current document format";
+        format.entries = {entry};
+        add_entry_to_native_control(format, entry);
+        if (format.window != nullptr) {
+            SendMessageA(format.window, CB_SETCURSEL, 0, 0);
+        }
+    }
+    populate_save_directories(dialog);
+}
+
+void sync_save_cab(DialogState& dialog) {
+    auto& edit = dialog.controls[kTmcSaveFile];
+    if (edit.window != nullptr && IsWindow(edit.window)) {
+        const int length = GetWindowTextLengthA(edit.window);
+        std::vector<char> buffer(static_cast<std::size_t>(length) + 1);
+        GetWindowTextA(edit.window, buffer.data(),
+                       static_cast<int>(buffer.size()));
+        edit.text = buffer.data();
+    }
+    if (dialog.cab != nullptr) {
+        FSetCabSz(dialog.cab, edit.text.c_str(), 1);
+    }
+    if (auto* cab = save_cab(dialog); cab != nullptr) {
+        const auto checked = [&dialog](const Tmc tmc) {
+            const auto found = dialog.controls.find(tmc);
+            return found != dialog.controls.end() &&
+                   found->second.window != nullptr &&
+                   SendMessageA(found->second.window, BM_GETCHECK, 0, 0) ==
+                       BST_CHECKED;
+        };
+        cab->quick_save = checked(kTmcSaveQuick);
+        cab->backup = checked(kTmcSaveBackup);
+        cab->lock_annotations = checked(kTmcSaveLockAnnotations);
+        cab->options = dialog.sab == 0 &&
+                       dialog.controls[kTmcSaveFormat].visible;
+    }
+}
+
+void materialize_save_as_template(DialogState& dialog) {
+    if (dialog.hid != kIddSaveAs || dialog.window == nullptr) {
+        return;
+    }
+    create_static_text(dialog, "Save File &Name:", {4, 2, 60, 9});
+    create_native_control(dialog, kTmcSaveFile, "EDIT", "",
+                          {4, 13, 81, 12},
+                          WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL);
+    create_native_control(dialog, kTmcOk, "BUTTON", "OK", {97, 6, 47, 14},
+                          WS_TABSTOP | BS_DEFPUSHBUTTON);
+    create_native_control(dialog, kTmcCancel, "BUTTON", "Cancel",
+                          {97, 25, 47, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcSaveOptions, "BUTTON", "&Options >>",
+                          {97, 42, 47, 14}, WS_TABSTOP | BS_PUSHBUTTON);
+    create_native_control(dialog, kTmcSaveDirectoryText, "STATIC",
+                          "&Directories:", {4, 38, 73, 9}, SS_LEFT);
+    create_native_control(dialog, kTmcSaveDirectoryList, "LISTBOX", "",
+                          {4, 50, 89, 48},
+                          WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY |
+                              LBS_SORT | LBS_NOINTEGRALHEIGHT);
+    create_native_control(dialog, kTmcSaveDirectory, "STATIC", "",
+                          {4, 27, 90, 9}, SS_LEFT);
+    create_native_control(dialog, kTmcSaveFormatPrompt, "STATIC",
+                          "&File Format:", {4, 105, 50, 9}, SS_LEFT);
+    create_native_control(dialog, kTmcSaveFormat, "COMBOBOX", "",
+                          {55, 103, 91, 72},
+                          WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST);
+    create_native_control(dialog, kTmcSaveQuick, "BUTTON", "Fast &Save",
+                          {4, 116, 46, 12},
+                          WS_TABSTOP | BS_AUTOCHECKBOX);
+    create_native_control(dialog, kTmcSaveBackup, "BUTTON", "Create &Backup",
+                          {4, 128, 62, 12},
+                          WS_TABSTOP | BS_AUTOCHECKBOX);
+    create_native_control(dialog, kTmcSaveLockAnnotations, "BUTTON",
+                          "&Lock for Annotations", {4, 140, 92, 12},
+                          WS_TABSTOP | BS_AUTOCHECKBOX);
+    dialog.caption = "Save As";
+    dialog.native_modal = true;
+    read_save_cab(dialog);
+    set_save_options_visible(dialog, false);
 }
 
 bool is_font_name_control(const DialogState& dialog, const Tmc tmc) {
@@ -1546,6 +1806,8 @@ void enter_open_directory(DialogState& dialog) {
 void finish_native_dialog(DialogState& dialog, const Tmc result) {
     if (dialog.hid == kIddOpen) {
         sync_open_cab(dialog);
+    } else if (dialog.hid == kIddSaveAs) {
+        sync_save_cab(dialog);
     } else if (dialog.hid == kIddNewDoc) {
         sync_new_cab(dialog);
     } else if (dialog.hid == kIddApplyStyle) {
@@ -1593,6 +1855,17 @@ void handle_dialog_command(const Hdlg handle, const WPARAM w_param,
             GetWindowTextA(found->second.window, text.data(),
                            static_cast<int>(text.size()));
             found->second.text = text.data();
+        } else if (tmc == kTmcSaveFile && dialog->hid == kIddSaveAs) {
+            const int length = GetWindowTextLengthA(found->second.window);
+            std::vector<char> text(static_cast<std::size_t>(length) + 1);
+            GetWindowTextA(found->second.window, text.data(),
+                           static_cast<int>(text.size()));
+            found->second.text = text.data();
+        } else if (dialog->hid == kIddSaveAs &&
+                   (tmc == kTmcSaveQuick || tmc == kTmcSaveBackup ||
+                    tmc == kTmcSaveLockAnnotations)) {
+            found->second.value = static_cast<Word>(SendMessageA(
+                found->second.window, BM_GETCHECK, 0, 0) == BST_CHECKED);
         }
     }
     g_current_dialog = handle;
@@ -1685,6 +1958,24 @@ void handle_dialog_command(const Hdlg handle, const WPARAM w_param,
         invoke_dialog_proc(*dialog, kDlmChange, tmc);
         return;
     }
+    if (dialog->hid == kIddSaveAs && tmc == kTmcSaveFile &&
+        notification == EN_CHANGE) {
+        invoke_dialog_proc(*dialog, kDlmChange, tmc);
+        return;
+    }
+    if (dialog->hid == kIddSaveAs && tmc == kTmcSaveDirectoryList &&
+        (notification == LBN_SELCHANGE || notification == LBN_DBLCLK)) {
+        const LRESULT selection = SendMessageA(
+            found->second.window, LB_GETCURSEL, 0, 0);
+        if (selection != LB_ERR) {
+            found->second.value = static_cast<Word>(selection);
+        }
+        invoke_dialog_proc(*dialog,
+                           notification == LBN_DBLCLK ? kDlmDblClk
+                                                     : kDlmClick,
+                           tmc, found->second.value);
+        return;
+    }
     if (dialog->hid == kIddOpen && tmc == kTmcOpenFileList &&
         (notification == LBN_SELCHANGE || notification == LBN_DBLCLK)) {
         select_open_file(*dialog);
@@ -1723,7 +2014,10 @@ void handle_dialog_command(const Hdlg handle, const WPARAM w_param,
                     tmc == kTmcSummary)) {
             finish_native_dialog(*dialog, tmc);
         } else {
-            invoke_dialog_proc(*dialog, kDlmClick, tmc);
+            const Word new_value = found == dialog->controls.end()
+                                       ? 0
+                                       : found->second.value;
+            invoke_dialog_proc(*dialog, kDlmClick, tmc, new_value);
         }
     }
 }
@@ -1868,6 +2162,8 @@ Hdlg HdlgStartDlg(DltHeader** dialog_template, Hcab cab, Dli* initializer) {
     materialize_icon_bar_template(g_dialogs.at(handle));
     materialize_new_template(g_dialogs.at(handle));
     materialize_open_template(g_dialogs.at(handle));
+    materialize_save_as_template(g_dialogs.at(handle));
+    materialize_about_template(g_dialogs.at(handle));
     materialize_character_template(g_dialogs.at(handle));
     materialize_apply_style_template(g_dialogs.at(handle));
     materialize_define_style_template(g_dialogs.at(handle));
@@ -2063,6 +2359,9 @@ void SdmScaleRec(Rec*) {}
 
 int FSetDlgSab(Word sab) {
     g_dialog.sab = sab;
+    if (g_dialog.hid == kIddSaveAs) {
+        set_save_options_visible(g_dialog, true);
+    }
     return true;
 }
 Word SabGetDlg() { return g_dialog.sab; }
@@ -2071,7 +2370,14 @@ void SetTmcVal_sdm21(Tmc tmc, Word value) {
     auto& state = control(tmc);
     state.value = value;
     if (state.window != nullptr && IsWindow(state.window)) {
-        SendMessageA(state.window, CB_SETCURSEL, value, 0);
+        if (window_is_class(state.window, "BUTTON")) {
+            SendMessageA(state.window, BM_SETCHECK,
+                         value ? BST_CHECKED : BST_UNCHECKED, 0);
+        } else if (window_is_class(state.window, "LISTBOX")) {
+            SendMessageA(state.window, LB_SETCURSEL, value, 0);
+        } else {
+            SendMessageA(state.window, CB_SETCURSEL, value, 0);
+        }
     }
 }
 Word ValGetTmc(Tmc tmc) {
@@ -2079,6 +2385,18 @@ Word ValGetTmc(Tmc tmc) {
     const auto found = g_dialog.controls.find(value_tmc);
     if (found == g_dialog.controls.end()) {
         return 0;
+    }
+    if (found->second.window != nullptr &&
+        window_is_class(found->second.window, "BUTTON")) {
+        found->second.value = static_cast<Word>(SendMessageA(
+            found->second.window, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    } else if (found->second.window != nullptr &&
+               window_is_class(found->second.window, "LISTBOX")) {
+        const LRESULT selection = SendMessageA(
+            found->second.window, LB_GETCURSEL, 0, 0);
+        if (selection != LB_ERR) {
+            found->second.value = static_cast<Word>(selection);
+        }
     }
     refresh_font_control_value(g_dialog, value_tmc, found->second, true);
     return found->second.value;

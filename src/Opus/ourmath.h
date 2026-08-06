@@ -27,7 +27,11 @@ typedef struct
 
 typedef struct
 	{
+#ifdef OPUS_X64
+	SHORT w1, w2;
+#else
 	int w1, w2;
+#endif
 	} CMPNUMRET;
 
 /* really CmpNum returns a long */
@@ -82,8 +86,13 @@ typedef union
 /* temporary simulation stuff until we get the real mathpack */
 typedef union {
 		struct {
+#ifdef OPUS_X64
+			WORD     w1;
+			SHORT    w0;
+#else
 			unsigned w1;
 			int	     w0;
+#endif
 			};
 		LONG    l;
 		} NUMCVT;

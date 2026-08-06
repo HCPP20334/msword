@@ -19,6 +19,16 @@
 #include <malloc.h>
 #include <string.h>
 
+/* A null Win16 module handle made GetProcAddress fail.  On current Windows,
+ * passing that invalid handle can instead search the process image.  Opus
+ * probes retired modules such as KERNEL, GDI, and USER by ordinal, so an
+ * unsuccessful probe must not be allowed to resolve an unrelated WORD1
+ * export with the same ordinal. */
+static __inline FARPROC OpusGetProcAddress(HMODULE module, LPCSTR name) {
+    return module != NULL ? GetProcAddress(module, name) : NULL;
+}
+#define GetProcAddress OpusGetProcAddress
+
 /* The SDK retains ChangeMenu only for source compatibility, with its Win16
  * UINT submenu parameter.  That truncates HMENU on Win64. */
 #ifdef ChangeMenu

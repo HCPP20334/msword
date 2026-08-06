@@ -1,7 +1,9 @@
-/*
- * Placeholder template boundary for the checked-in saveas.des description.
- * It lets the original save algorithms compile while the missing historical
- * dialog compiler is being ported.  This template must be regenerated before
- * the Save As dialog is made runtime-active.
- */
-DLG_CONST DLT dltSaveAs = { 0 };
+#pragma once
+
+/* Regenerated from Opus/dlg/saveas.des.  The x64 SDM compatibility layer
+   materializes the archived controls as native Win32 controls. */
+extern BOOL FDlgSaveAs(DLM, TMC, WORD, WORD, WORD);
+DLG_CONST DLT dltSaveAs = {
+    { 14, 18, 150, 102 }, IDDSaveAs, tmcSavFile, FDlgSaveAs,
+    13, bdrSysMenu, { 0 }
+};
