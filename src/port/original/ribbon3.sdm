@@ -1,0 +1,7 @@
+/* Regenerated from Opus/dlg/ribbon3.des. */
+#define ctmDltRibbon3 6
+extern BOOL FDlgIb(DLM, TMC, WORD, WORD, WORD);
+DLG_CONST DLT dltRibbon3 = {
+    { 0, 1, 160, 13 }, cxtRibbonIconBar, tmcNull, FDlgIb,
+    ctmDltRibbon3, bdrNone, { 0 }
+};

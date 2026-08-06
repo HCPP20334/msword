@@ -1,0 +1,4 @@
+#pragma once
+
+/* Compile-stage template boundary for Opus/dlg/recorder.des. */
+static DLG_CONST DLT dltRecorder = { 0 };

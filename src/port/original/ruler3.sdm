@@ -1,0 +1,7 @@
+/* Regenerated from Opus/dlg/ruler3.des. */
+#define ctmDltRuler3 3
+extern BOOL FDlgIb(DLM, TMC, WORD, WORD, WORD);
+DLG_CONST DLT dltRuler3 = {
+    { 0, 1, 102, 13 }, cxtRulerIconBar, tmcNull, FDlgIb,
+    ctmDltRuler3, bdrNone, { 0 }
+};

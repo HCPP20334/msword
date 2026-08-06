@@ -1,0 +1,4 @@
+#pragma once
+
+/* Compile-stage template boundary for Opus/dlg/renmacro.des. */
+static DLG_CONST DLT dltRenMacro = { 0 };

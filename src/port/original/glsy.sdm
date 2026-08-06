@@ -1,0 +1,2 @@
+/* Template boundary for the original Opus/dlg/glsy.des description. */
+DLG_CONST DLT dltGlossary = { 0 };

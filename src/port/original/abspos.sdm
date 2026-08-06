@@ -1,0 +1,4 @@
+#pragma once
+
+/* Compile-stage template boundary for Opus/dlg/abspos.des. */
+DLG_CONST DLT dltAbsPos = { 0 };

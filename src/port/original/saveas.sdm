@@ -1,0 +1,7 @@
+/*
+ * Placeholder template boundary for the checked-in saveas.des description.
+ * It lets the original save algorithms compile while the missing historical
+ * dialog compiler is being ported.  This template must be regenerated before
+ * the Save As dialog is made runtime-active.
+ */
+DLG_CONST DLT dltSaveAs = { 0 };

@@ -1,0 +1,4 @@
+#pragma once
+
+/* Compile-stage boundary for the checked-in Opus/dlg/printmrg.des template. */
+static DLG_CONST DLT dltPrintMerge = { 0 };

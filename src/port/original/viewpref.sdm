@@ -1,0 +1,2 @@
+/* Template boundary for the original Opus/dlg/viewpref.des description. */
+DLG_CONST DLT dltViewPref = { 0 };

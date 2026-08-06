@@ -1,0 +1,2 @@
+#pragma once
+static DLG_CONST DLT dltNewDoc = { 0 };

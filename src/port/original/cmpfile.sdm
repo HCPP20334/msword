@@ -1,0 +1,2 @@
+/* Template boundary for the original Opus/dlg/cmpfile.des description. */
+DLG_CONST DLT dltCmpFile = { 0 };

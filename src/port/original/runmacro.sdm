@@ -1,0 +1,2 @@
+/* Compile-only dialog-template boundary for Opus/dlg/runmacro.des. */
+static DLG_CONST DLT dltRunMacro = { 0 };

@@ -1,0 +1,7 @@
+#pragma once
+
+/*
+ * Compile-stage template boundary for Opus/dlg/para.des.  The native SDM
+ * resource compiler/runtime will replace this descriptor during UI bring-up.
+ */
+DLG_CONST DLT dltParaLooks = { 0 };

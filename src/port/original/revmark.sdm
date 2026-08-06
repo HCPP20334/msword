@@ -1,0 +1,2 @@
+/* Template boundary for the original Opus/dlg/revmark.des description. */
+DLG_CONST DLT dltRevMarking = { 0 };

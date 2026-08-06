@@ -1,0 +1,2 @@
+/* Template boundary for the original Opus/dlg/print.des description. */
+DLG_CONST DLT dltPrint = { 0 };

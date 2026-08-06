@@ -1,0 +1,4 @@
+#pragma once
+
+/* Compile-stage boundary for the checked-in Opus/dlg/sort.des template. */
+static DLG_CONST DLT dltSort = { 0 };

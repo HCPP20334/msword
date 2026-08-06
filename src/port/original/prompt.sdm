@@ -1,0 +1,6 @@
+/*
+ * Compile-only template boundary for Opus/dlg/prompt.des.  Regenerate this
+ * from the original description once the historical dialog compiler is able
+ * to emit x64-compatible templates; this placeholder is not runtime-active.
+ */
+static DLG_CONST DLT dltPrompt = { 0 };

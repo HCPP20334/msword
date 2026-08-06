@@ -1,0 +1,5 @@
+/*
+ * Compile-only boundary for Opus/dlg/edstyle.des.  Regenerate the complete
+ * template with the ported historical dialog compiler before activation.
+ */
+DLG_CONST DLT dltDefineStyle = { 0 };

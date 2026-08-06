@@ -1,0 +1,5 @@
+/*
+ * Placeholder template boundary for the checked-in vrfcnvtr.des source.
+ * This must be regenerated before Verify Converter becomes runtime-active.
+ */
+DLG_CONST DLT dltVerifyConvtr = { 0 };
