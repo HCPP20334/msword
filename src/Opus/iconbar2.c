@@ -87,6 +87,9 @@ extern HWND			 vhwndCBT;
 #ifdef WIN23
 extern int          vdbmgDevice;
 #endif /* WIN23 */
+#ifdef OPUS_X64
+extern int OpusWin95ChromeActive(void);
+#endif
 
 #ifdef WIN23
 #ifdef OPUS_X64
@@ -1281,10 +1284,23 @@ BOOL NEAR FCreateRibbon()
 	BltDlt(dltRibbon, dlt);
 #endif /* WIN23 */
 
+#ifdef OPUS_X64
+	/* Keep the original ribbon alive as the authoritative font/size state
+	   controller.  The Win95 bar mirrors its controls, so the old bar itself
+	   remains hidden. */
+	if (OpusWin95ChromeActive())
+		((struct IBD *)ibd)->fInvisible = fTrue;
+#endif
+
 	GetClientRect( vhwndApp, (LPRECT)&rc );
 
 	if ((vhwndRibbon = HwndCreateIconBar(ibd, dlt, vhwndApp, &rc, rgtmwRibbon)) == NULL)
 		return (fFalse);
+
+#ifdef OPUS_X64
+	if (OpusWin95ChromeActive())
+		ShowWindow(vhwndRibbon, SW_HIDE);
+#endif
 
 	/* at startup, put off update until after doc is created  */
 	/* ... same if we're restoring ribbon after returning from CBT */

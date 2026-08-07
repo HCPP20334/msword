@@ -1,6 +1,7 @@
 #include <windows.h>
 
 1 RT_MANIFEST "winword.manifest"
+201 BITMAP "assets\\word95-toolbar.bmp"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 0,2,0,0

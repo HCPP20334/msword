@@ -115,6 +115,9 @@ extern char szClsStart[];
 extern int              vfDeactByOtherApp;
 extern IDF		vidf;
 extern struct ITR	vitr;
+#ifdef OPUS_X64
+extern int OpusCreateWin95Chrome(HWND);
+#endif
 
 
 /* G L O B A L S */
@@ -363,6 +366,13 @@ BOOL fTutorial;
 		ReportSz("Menu load failure");
 		goto InzFailed;
 		}
+
+#ifdef OPUS_X64
+	/* The native port presents the original editor through a two-row,
+	   Windows 95-style command/formatting bar.  Failure is non-fatal: the
+	   historical ribbon remains available as a fallback. */
+	OpusCreateWin95Chrome(vhwndApp);
+#endif
 
 	Scribble(15,'C');
 	Scribble(14,' ');
@@ -772,6 +782,18 @@ DisplayRibbonInit()
 	Scribble(14,'X');
 	UpdateRibbon(fTrue /* fInit */);
 	Scribble(14,'Y');
+#ifdef OPUS_X64
+	{
+	extern int OpusWin95ChromeActive(void);
+	extern void OpusSyncWin95Toolbar(void);
+	if (OpusWin95ChromeActive())
+		{
+		OpusSyncWin95Toolbar();
+		ShowWindow(vhwndRibbon, SW_HIDE);
+		return;
+		}
+	}
+#endif
 	ShowWindow(vhwndRibbon, SHOW_OPENWINDOW);
 	UpdateWindow(vhwndRibbon);
 }

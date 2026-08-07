@@ -257,9 +257,6 @@ CMB * pcmb;
 {
 	CMD cmd;
 	BOOL fDirty;
-#ifdef OPUS_X64
-	SetPropA(vhwndApp, "OpusX64SaveAsStage", (HANDLE)(INT_PTR)1);
-#endif
 
 	if (selCur.doc == docNil)
 		{
@@ -276,9 +273,6 @@ CMB * pcmb;
 		{
 		DoPostSaveDoc(pcmb, fDirty);
 		}
-#ifdef OPUS_X64
-	SetPropA(vhwndApp, "OpusX64SaveAsStage", (HANDLE)(INT_PTR)(100 + cmd));
-#endif
 LRet:
 	/* at all costs, avoid telling the user to save his work when giving an
 	error message for save! */
@@ -802,15 +796,9 @@ CMB * pcmb;
 	pcab = *pcmb->hcab;
 	pcab->sab = 0;
 	pcab->fOptions = fFalse;
-#ifdef OPUS_X64
-	SetPropA(vhwndApp, "OpusX64SaveAsStage", (HANDLE)(INT_PTR)2);
-#endif
 
 	{
 	TMC tmc = TmcOurDoDlg(dlt, pcmb);
-#ifdef OPUS_X64
-	SetPropA(vhwndApp, "OpusX64SaveAsStage", (HANDLE)(INT_PTR)(200 + tmc));
-#endif
 	switch (tmc)
 		{
 #ifdef DEBUG

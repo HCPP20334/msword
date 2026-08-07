@@ -635,6 +635,7 @@ add_library(opus_original_engine STATIC
     port/original/opus_asm_resn2_adapters.cpp
     port/original/opus_asm_native_adapters.cpp
     port/original/opus_asm_wproc.cpp
+    port/original/opus_win95_chrome.cpp
     port/original/opus_x64_segment_anchors.c
 )
 add_dependencies(opus_original_engine

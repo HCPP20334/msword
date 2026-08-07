@@ -955,9 +955,6 @@ CMB *pcmb;
 CMD CmdAbout(pcmb)
 CMB *pcmb;
 {
-#ifdef OPUS_X64
-	SetPropA(vhwndApp, "OpusX64AboutStage", (HANDLE)(INT_PTR)1);
-#endif
 	if (FCmdFillCab())
 		{
 		extern BOOL f8087;
@@ -974,11 +971,6 @@ CMB *pcmb;
 				Iag(CABABOUT, hszAboutVersion));
 		FSetCabSz(pcmb->hcab, SzShared(szCopyrightDef), 
 				Iag(CABABOUT, hszAboutCopyright));
-#ifdef OPUS_X64
-		SetPropA(vhwndApp, "OpusX64AboutStage", (HANDLE)(INT_PTR)2);
-#endif
-
-
 #ifdef OPUS_X64
 		/* Win16 KERNEL ordinal 169 was GetFreeSpace.  It does not exist on
 		 * Win64; use the native system-memory API for the same About field. */
@@ -1023,10 +1015,6 @@ CMB *pcmb;
 			if (!fInitialized)
 				InitMath();
 			}
-#ifdef OPUS_X64
-		SetPropA(vhwndApp, "OpusX64AboutStage", (HANDLE)(INT_PTR)3);
-#endif
-
 		FSetCabSz(pcmb->hcab, f8087 ? SzSharedKey("Present", Present) : 
 				szNone, Iag(CABABOUT, hszAboutMath));
 
@@ -1044,13 +1032,7 @@ CMB *pcmb;
 		TMC tmc;
 
 		BltDlt(dltAbout, dlt);
-#ifdef OPUS_X64
-		SetPropA(vhwndApp, "OpusX64AboutStage", (HANDLE)(INT_PTR)4);
-#endif
 		tmc = TmcOurDoDlg(dlt, pcmb);
-#ifdef OPUS_X64
-		SetPropA(vhwndApp, "OpusX64AboutStage", (HANDLE)(INT_PTR)(100 + tmc));
-#endif
 		if (tmc == tmcError)
 			{
 			return cmdError;

@@ -18,7 +18,11 @@ resolutions. */
 #define ddyIconLH 3
 #ifdef WIN23
 #define dyRuler2   31    /* height of Ruler window in 1/8 char units */
+#ifdef OPUS_X64
+#define dyRuler3	15	/* compact Win95 ruler; formatting lives in the top bar */
+#else
 #define dyRuler3	28	/* height of Ruler under Win 3 */
+#endif
 #else
 #define dyRuler   31    /* height of Ruler window in 1/8 char units */
 #endif /* WIN23 */

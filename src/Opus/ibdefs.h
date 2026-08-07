@@ -383,6 +383,32 @@ ibdEnd
 #include "ruler3.hs"
 #include "ruler3.sdm"
 IbProcRuler();
+#ifdef OPUS_X64
+ibdHeader(ibdRuler3, dyRuler3, fTrue, ibcRuler, fFalse, fTrue, IbProcRuler)
+	/* Retain the controls offscreen so the original ruler/style state code
+	   remains authoritative while the Win95 formatting bar mirrors it. */
+	ibidDialog(4096,0,cabiCABRULER3,sizeof(dltRuler3),idRulDialog)
+	ibidDlgItem(tmcStyle,idRulStyle)
+	ibidBitmap(idrbRulerAlign3, 0)
+	ibidToggleBmp(4096,1,16,11,idRulParaLeft,bcmNil, fTrue)
+	ibidToggleBmp(4112,1,16,11,idRulParaCenter,bcmNil, fTrue)
+	ibidToggleBmp(4128,1,16,11,idRulParaRight,bcmNil, fTrue)
+	ibidToggleBmp(4144,1,16,11,idRulParaBoth,bcmNil, fTrue)
+	ibidBitmap(idrbRulerToggles3, 0)
+	ibidToggleBmp(4160,1,16,11,idRulSpace1,bcmNil, fTrue)
+	ibidToggleBmp(4176,1,16,11,idRulSpace15,bcmNil, fTrue)
+	ibidToggleBmp(4192,1,16,11,idRulSpace2,bcmNil, fTrue)
+	ibidToggleBmp(4208,1,16,11,idRulParaClose,bcmNil, fTrue)
+	ibidToggleBmp(4224,1,16,11,idRulParaOpen,bcmNil, fTrue)
+	ibidToggleBmp(4240,1,16,11,idRulTabLeft,bcmNil, fTrue)
+	ibidToggleBmp(4256,1,16,11,idRulTabCenter,bcmNil, fTrue)
+	ibidToggleBmp(4272,1,16,11,idRulTabRight,bcmNil, fTrue)
+	ibidToggleBmp(4288,1,16,11,idRulTabDecimal,bcmNil, fTrue)
+	ibidBitmap(idrbRulerAlign3, 4)
+	ibidToggleBmp(4304,1,16,11,idRulMode,bcmRulerMode, fFalse)
+	ibidCustomWnd(1,1,10,13,"",idRulMark)
+ibdEnd
+#else
 ibdHeader(ibdRuler3, dyRuler3, fTrue, ibcRuler, fFalse, fTrue, IbProcRuler)
 	ibidDialog(0,0,cabiCABRULER3,sizeof(dltRuler3),idRulDialog)
 	ibidDlgItem(tmcStyle,idRulStyle)
@@ -405,6 +431,7 @@ ibdHeader(ibdRuler3, dyRuler3, fTrue, ibcRuler, fFalse, fTrue, IbProcRuler)
 	ibidToggleBmp(383,1,16,11,idRulMode,bcmRulerMode, fFalse)
 	ibidCustomWnd(1,14,10,4,"",idRulMark)
 ibdEnd
+#endif /* OPUS_X64 */
 #endif /* RULERIB */
 
 

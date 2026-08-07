@@ -148,6 +148,12 @@ extern int              vcInMessageBox;
 extern int              vfSmallFrameEMS;
 extern int              vfUrgentAlloc;
 extern PVS		vpvs;
+#ifdef OPUS_X64
+extern HWND             vhwndWin95Toolbar;
+extern int              OpusWin95ChromeActive(void);
+extern int              OpusWin95ToolbarHeight(void);
+extern void             OpusSizeWin95Toolbar(HWND);
+#endif
 extern int FAR pascal LbcCmpLbox();
 extern WORD				wmWinHelp;
 #ifdef WIN23
@@ -980,7 +986,11 @@ KMP ** hkmp;
 
 
 
+#ifdef OPUS_X64
+#define ihwndMax 7
+#else
 #define ihwndMax 6
+#endif
 
 /* A P P  S I Z E */
 /* handles WM_SIZE message for App window */
@@ -1011,6 +1021,11 @@ BOOL fShrink;
 
 	if (vhwndAppIconBar != NULL)
 		rghwnd[ihwnd++] = vhwndAppIconBar;
+
+#ifdef OPUS_X64
+	if (OpusWin95ChromeActive())
+		rghwnd[ihwnd++] = vhwndWin95Toolbar;
+#endif
 
 	if (vhwndPgPrvw != NULL)
 		rghwnd[ihwnd++] = vhwndPgPrvw;
@@ -1044,16 +1059,27 @@ BOOL fShrink;
 			}
 		else  if (hwnd == vhwndRibbon || hwnd == vhwndAppIconBar)
 			{
+#ifdef OPUS_X64
+			if (hwnd == vhwndRibbon && OpusWin95ChromeActive())
+				ShowWindow(hwnd, SW_HIDE);
+			else
+#endif
+				{
 /* NOTE: height of ribbon and macro iconbar are the same - dypRibbon
 but outline and header iconbar should be dypIconBar */
-			Assert( vsci.dypRibbon );
-			GetClientRect( vhwndApp, (LPRECT) &rc );
-			rc.ypTop -= vsci.dxpBorder;
-			rc.xpLeft -= vsci.dxpBorder;
-			rc.xpRight += vsci.dxpBorder;
-			rc.ypBottom = rc.ypTop + vsci.dypRibbon;
-			MoveWindowRc( hwnd, &rc, fTrue );
+				Assert( vsci.dypRibbon );
+				GetClientRect( vhwndApp, (LPRECT) &rc );
+				rc.ypTop -= vsci.dxpBorder;
+				rc.xpLeft -= vsci.dxpBorder;
+				rc.xpRight += vsci.dxpBorder;
+				rc.ypBottom = rc.ypTop + vsci.dypRibbon;
+				MoveWindowRc( hwnd, &rc, fTrue );
+				}
 			}
+#ifdef OPUS_X64
+		else if (hwnd == vhwndWin95Toolbar)
+			OpusSizeWin95Toolbar(vhwndApp);
+#endif
 		else  if (hwnd == vhwndPgPrvw)
 			{
 			GetClientRect(vhwndApp, (LPRECT) &rc);
@@ -1089,11 +1115,20 @@ struct RC *prc;
 		}
 	if (vhwndRibbon || vhwndAppIconBar != NULL)
 		{
+#ifdef OPUS_X64
+		if (OpusWin95ChromeActive())
+			goto LWin95Toolbar;
+#endif
 /* NOTE: height of ribbon and macro iconbar are the same - dypRibbon
 but outline and header iconbar should be dypIconBar */
 		Assert( vsci.dypRibbon );
 		prc->ypTop += vsci.dypRibbon - vsci.dypBorder;
 		}
+#ifdef OPUS_X64
+LWin95Toolbar:
+	if (OpusWin95ChromeActive())
+		prc->ypTop += OpusWin95ToolbarHeight() - vsci.dypBorder;
+#endif
 }
 
 
