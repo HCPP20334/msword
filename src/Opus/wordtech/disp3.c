@@ -2054,6 +2054,7 @@ IpgdNextWw(ww, fRepag)
 	int ipgd = PwwdWw(ww)->ipgd + 1;
 	int doc = PmwdWw(ww)->doc;
 	struct PLC **hplcpgd;
+	struct PGD pgdLast;
 	struct RPL rpl;
 	struct LBS lbsText, lbsFtn;
 	int fFormatVisiSave;
@@ -2062,8 +2063,25 @@ IpgdNextWw(ww, fRepag)
 	int flmSave = vflm;
 #endif
 	Assert(PwwdWw(ww)->fPageView);
+	hplcpgd = PdodDoc(doc)->hplcpgd;
 
-	if (ipgd >= IMacPlc(PdodDoc(doc)->hplcpgd) && fRepag)
+#ifdef OPUS_X64
+	/* A valid final PGD whose sentinel already reaches cpMac is a known end
+	   of document.  Re-running the 1989 repaginator every time a wheel event
+	   presses against that edge can invalidate the live page descriptors and
+	   briefly erase (or crash) the last page. */
+	if (fRepag && ipgd >= IMacPlc(hplcpgd) &&
+			IMacPlc(hplcpgd) > 0)
+		{
+		GetPlc(hplcpgd, IMacPlc(hplcpgd) - 1, &pgdLast);
+		if (!pgdLast.fUnk &&
+				CpPlc(hplcpgd, IMacPlc(hplcpgd)) >=
+				CpMacDocEdit(doc))
+			return ipgdNil;
+		}
+#endif
+
+	if (ipgd >= IMacPlc(hplcpgd) && fRepag)
 		{
 #ifdef MAC
 		InitFliForLayout(lmPagevw, &fFormatVisiSave);
@@ -2081,7 +2099,7 @@ IpgdNextWw(ww, fRepag)
 		EndFliLayout(lmSave, WinMac(flmSave, fFormatVisiSave));
 		}
 
-	return ipgd >= IMacPlc(PdodDoc(doc)->hplcpgd) ? ipgdNil : ipgd;
+	return ipgd >= IMacPlc(hplcpgd) ? ipgdNil : ipgd;
 }
 
 
@@ -2441,6 +2459,9 @@ EXPORT SetElevWw(ww)
 	if (pwwd->fPageView)
 		{
 		int dqNextPg, dqCurPg;
+#ifdef OPUS_X64
+		int yeHome, yeLastPage;
+#endif
 		cpCurPg = CpFromIpgd(doc, ww, pwwd->ipgd); /* HM */
 		if ((ipgd = IpgdNextWw(ww, fFalse)) == ipgdNil)
 			cpNextPg = CpMacDoc(doc);
@@ -2451,9 +2472,24 @@ EXPORT SetElevWw(ww)
 		pwwd = PwwdWw(ww);
 		dqCurPg = DqRatio(cpCurPg, dqMax - dqPgvwElevSpace, cpMac);
 		dqNextPg = DqRatio(cpNextPg, dqMax - dqPgvwElevSpace, cpMac);
+#ifdef OPUS_X64
+		yeHome = YeTopPage(ww);
+		if (ipgd == ipgdNil)
+			{
+			yeLastPage = min(yeHome, pwwd->rcwDisp.ywBottom -
+					DyOfRc(&pwwd->rcePage) - dypGrayOutsideSci);
+			dyeScrollMac = max(1, yeHome - yeLastPage);
+			}
+		else
+			dyeScrollMac = max(1, DyOfRc(&pwwd->rcePage) +
+					max(8, dypGrayOutsideSci / 3));
+		dyeScroll = min(dyeScrollMac,
+				max(0, yeHome - pwwd->rcePage.yeTop));
+#else
 		dyeScrollMac = max(1,
 				DyOfRc(&pwwd->rcePage) - DyOfRc(&pwwd->rcwDisp));
 		dyeScroll = min(dyeScrollMac, max(0, -pwwd->rcePage.yeTop));
+#endif
 		if (dyeScrollMac > 0)
 			dq = min( dqCurPg + NMultDiv(dqNextPg - dqCurPg, dyeScroll, dyeScrollMac),
 					dqMax - dqPgvwElevSpace);

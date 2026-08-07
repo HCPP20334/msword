@@ -14,6 +14,14 @@
 extern "C" int OpusGetWin95VerticalRulerMetrics(
     HWND pane, int* page_top, int* page_bottom, int* top_margin,
     int* bottom_margin, int* pixels_per_inch);
+extern "C" int OpusGetWin95ContinuousPageMetrics(
+    HWND pane, int* page_left, int* page_top, int* page_right,
+    int* page_bottom, int* page_gap, int* has_previous, int* has_next);
+extern "C" int OpusScrollWin95ContinuousPages(HWND pane, int pixels);
+extern "C" int OpusGetWin95ZoomPercent(HWND pane);
+extern "C" int OpusGetWin95CurrentPageIndex(HWND pane);
+extern "C" int OpusAdjustWin95Zoom(HWND pane, int percent_delta);
+extern "C" int OpusRecenterWin95PageView(HWND pane);
 extern "C" int OpusSetWin95VerticalMargin(
     HWND pane, int top_margin, int margin_pixels);
 extern "C" int OpusGetWin95HorizontalRulerMetrics(
@@ -175,6 +183,26 @@ struct HorizontalRulerDragState {
 };
 
 HorizontalRulerDragState g_horizontal_ruler_drag{};
+
+struct DocumentWheelState {
+    HWND pane = nullptr;
+    int scroll_remainder = 0;
+    int zoom_remainder = 0;
+};
+
+DocumentWheelState g_document_wheel{};
+
+struct PageSnapshot {
+    HWND pane = nullptr;
+    int page_index = -1;
+    int zoom_percent = 100;
+    int width = 0;
+    int height = 0;
+    HBITMAP bitmap = nullptr;
+    ULONGLONG last_used = 0;
+};
+
+std::vector<PageSnapshot> g_page_snapshots;
 
 int dpi_for_window(HWND window) {
     using GetDpiForWindowProc = UINT(WINAPI*)(HWND);
@@ -1010,7 +1038,7 @@ HWND create_zoom_combo(HWND toolbar) {
     HWND combo = CreateWindowExW(
         0, L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
-            CBS_DROPDOWNLIST,
+            CBS_DROPDOWN | CBS_AUTOHSCROLL,
         0, 0, 10, 200, toolbar,
         reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kComboZoom)),
         GetModuleHandleW(nullptr), nullptr);
@@ -1025,6 +1053,19 @@ HWND create_zoom_combo(HWND toolbar) {
                  reinterpret_cast<LPARAM>(L"Print Preview"));
     SendMessageW(combo, CB_SETCURSEL, 0, 0);
     return combo;
+}
+
+void update_zoom_combo(HWND pane, int percent) {
+    const HWND app = GetAncestor(pane, GA_ROOT);
+    const HWND toolbar = FindWindowExW(app, nullptr, kToolbarClass, nullptr);
+    ToolbarState* state = toolbar_state(toolbar);
+    if (state == nullptr || state->zoom_combo == nullptr) {
+        return;
+    }
+    const std::wstring text = std::to_wstring(percent) + L"%";
+    SendMessageW(state->zoom_combo, CB_SETCURSEL,
+                 static_cast<WPARAM>(-1), 0);
+    SetWindowTextW(state->zoom_combo, text.c_str());
 }
 
 void update_toolbar_menu_checks(HWND app, const ToolbarState& state) {
@@ -1194,6 +1235,195 @@ void cancel_vertical_margin_drag(HWND pane) {
     }
     g_vertical_ruler_drag = {};
     redraw_vertical_ruler(pane);
+}
+
+PageSnapshot* find_page_snapshot(HWND pane, int page_index, int width,
+                                 int height, int zoom_percent) {
+    for (auto& snapshot : g_page_snapshots) {
+        if (snapshot.pane == pane && snapshot.page_index == page_index &&
+            snapshot.width == width && snapshot.height == height &&
+            snapshot.zoom_percent == zoom_percent) {
+            snapshot.last_used = GetTickCount64();
+            return &snapshot;
+        }
+    }
+    return nullptr;
+}
+
+void prune_page_snapshots(HWND pane) {
+    std::size_t pane_count = 0;
+    for (const auto& snapshot : g_page_snapshots) {
+        if (snapshot.pane == pane) {
+            ++pane_count;
+        }
+    }
+    while (pane_count > 4) {
+        auto oldest = g_page_snapshots.end();
+        for (auto iterator = g_page_snapshots.begin();
+             iterator != g_page_snapshots.end(); ++iterator) {
+            if (iterator->pane == pane &&
+                (oldest == g_page_snapshots.end() ||
+                 iterator->last_used < oldest->last_used)) {
+                oldest = iterator;
+            }
+        }
+        if (oldest == g_page_snapshots.end()) {
+            break;
+        }
+        if (oldest->bitmap != nullptr) {
+            DeleteObject(oldest->bitmap);
+        }
+        g_page_snapshots.erase(oldest);
+        --pane_count;
+    }
+}
+
+void update_current_page_snapshot(HWND pane, HDC dc) {
+    int page_left = 0;
+    int page_top = 0;
+    int page_right = 0;
+    int page_bottom = 0;
+    int page_gap = 0;
+    int has_previous = 0;
+    int has_next = 0;
+    if (!OpusGetWin95ContinuousPageMetrics(
+            pane, &page_left, &page_top, &page_right, &page_bottom,
+            &page_gap, &has_previous, &has_next)) {
+        return;
+    }
+    const int page_index = OpusGetWin95CurrentPageIndex(pane);
+    const int zoom_percent = OpusGetWin95ZoomPercent(pane);
+    const int width = page_right - page_left;
+    const int height = page_bottom - page_top;
+    if (page_index < 0 || width <= 0 || height <= 0) {
+        return;
+    }
+
+    PageSnapshot* snapshot = find_page_snapshot(
+        pane, page_index, width, height, zoom_percent);
+    if (snapshot == nullptr) {
+        PageSnapshot created{};
+        created.pane = pane;
+        created.page_index = page_index;
+        created.zoom_percent = zoom_percent;
+        created.width = width;
+        created.height = height;
+        created.bitmap = CreateCompatibleBitmap(dc, width, height);
+        created.last_used = GetTickCount64();
+        if (created.bitmap == nullptr) {
+            return;
+        }
+        HDC memory = CreateCompatibleDC(dc);
+        HBITMAP previous = static_cast<HBITMAP>(
+            SelectObject(memory, created.bitmap));
+        RECT background{0, 0, width, height};
+        FillRect(memory, &background,
+                 static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+        SelectObject(memory, previous);
+        DeleteDC(memory);
+        g_page_snapshots.push_back(created);
+        snapshot = &g_page_snapshots.back();
+        prune_page_snapshots(pane);
+        snapshot = find_page_snapshot(
+            pane, page_index, width, height, zoom_percent);
+    }
+    if (snapshot == nullptr || snapshot->bitmap == nullptr) {
+        return;
+    }
+
+    RECT client{};
+    RECT page{page_left, page_top, page_right, page_bottom};
+    RECT visible{};
+    GetClientRect(pane, &client);
+    if (!IntersectRect(&visible, &page, &client)) {
+        return;
+    }
+    HDC memory = CreateCompatibleDC(dc);
+    HBITMAP previous = static_cast<HBITMAP>(
+        SelectObject(memory, snapshot->bitmap));
+    BitBlt(memory, visible.left - page_left, visible.top - page_top,
+           visible.right - visible.left, visible.bottom - visible.top,
+           dc, visible.left, visible.top, SRCCOPY);
+    SelectObject(memory, previous);
+    DeleteDC(memory);
+}
+
+void draw_neighbor_sheet(HDC dc, const RECT& sheet, const RECT& client,
+                         const PageSnapshot* snapshot) {
+    RECT visible{};
+    if (!IntersectRect(&visible, &sheet, &client)) {
+        return;
+    }
+
+    RECT shadow = sheet;
+    OffsetRect(&shadow, 3, 3);
+    RECT visible_shadow{};
+    if (IntersectRect(&visible_shadow, &shadow, &client)) {
+        HBRUSH shadow_brush = CreateSolidBrush(RGB(96, 96, 96));
+        FillRect(dc, &visible_shadow, shadow_brush);
+        DeleteObject(shadow_brush);
+    }
+
+    HBRUSH page_brush = CreateSolidBrush(RGB(255, 255, 255));
+    FillRect(dc, &visible, page_brush);
+    DeleteObject(page_brush);
+    if (snapshot != nullptr && snapshot->bitmap != nullptr) {
+        HDC memory = CreateCompatibleDC(dc);
+        HBITMAP previous = static_cast<HBITMAP>(
+            SelectObject(memory, snapshot->bitmap));
+        BitBlt(dc, visible.left, visible.top,
+               visible.right - visible.left, visible.bottom - visible.top,
+               memory, visible.left - sheet.left, visible.top - sheet.top,
+               SRCCOPY);
+        SelectObject(memory, previous);
+        DeleteDC(memory);
+    }
+    HBRUSH border_brush = CreateSolidBrush(RGB(96, 96, 96));
+    FrameRect(dc, &sheet, border_brush);
+    DeleteObject(border_brush);
+}
+
+void draw_continuous_page_neighbors(HWND pane, HDC dc) {
+    int page_left = 0;
+    int page_top = 0;
+    int page_right = 0;
+    int page_bottom = 0;
+    int page_gap = 0;
+    int has_previous = 0;
+    int has_next = 0;
+    if (!OpusGetWin95ContinuousPageMetrics(
+            pane, &page_left, &page_top, &page_right, &page_bottom,
+            &page_gap, &has_previous, &has_next)) {
+        return;
+    }
+
+    RECT client{};
+    GetClientRect(pane, &client);
+    const int page_height = page_bottom - page_top;
+    if (page_right <= page_left || page_height <= 0) {
+        return;
+    }
+    const int page_step = page_height + page_gap;
+    const int page_index = OpusGetWin95CurrentPageIndex(pane);
+    const int zoom_percent = OpusGetWin95ZoomPercent(pane);
+    if (has_previous) {
+        RECT previous{page_left, page_top - page_step,
+                      page_right, page_bottom - page_step};
+        draw_neighbor_sheet(
+            dc, previous, client,
+            find_page_snapshot(pane, page_index - 1,
+                               page_right - page_left, page_height,
+                               zoom_percent));
+    }
+    if (has_next) {
+        RECT next{page_left, page_top + page_step,
+                  page_right, page_bottom + page_step};
+        draw_neighbor_sheet(
+            dc, next, client,
+            find_page_snapshot(pane, page_index + 1,
+                               page_right - page_left, page_height,
+                               zoom_percent));
+    }
 }
 
 void draw_vertical_ruler(HWND pane, HDC dc) {
@@ -1756,6 +1986,41 @@ void show_document_context_menu(HWND pane, POINT screen_point) {
 LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
                                      WPARAM w_param, LPARAM l_param) {
     WNDPROC original = original_pane_proc(pane);
+    if (message == WM_MOUSEWHEEL) {
+        if (g_document_wheel.pane != pane) {
+            g_document_wheel = {};
+            g_document_wheel.pane = pane;
+        }
+        const int wheel_delta = GET_WHEEL_DELTA_WPARAM(w_param);
+        if ((GET_KEYSTATE_WPARAM(w_param) & MK_CONTROL) != 0) {
+            g_document_wheel.zoom_remainder += wheel_delta;
+            int percent_delta = 0;
+            while (g_document_wheel.zoom_remainder >= WHEEL_DELTA) {
+                percent_delta += 10;
+                g_document_wheel.zoom_remainder -= WHEEL_DELTA;
+            }
+            while (g_document_wheel.zoom_remainder <= -WHEEL_DELTA) {
+                percent_delta -= 10;
+                g_document_wheel.zoom_remainder += WHEEL_DELTA;
+            }
+            if (percent_delta != 0) {
+                const int percent = OpusAdjustWin95Zoom(
+                    pane, percent_delta);
+                update_zoom_combo(pane, percent);
+            }
+            return 0;
+        }
+
+        const int scaled_delta = g_document_wheel.scroll_remainder -
+            wheel_delta * scale(pane, 48);
+        const int pixels = scaled_delta / WHEEL_DELTA;
+        g_document_wheel.scroll_remainder =
+            scaled_delta % WHEEL_DELTA;
+        if (pixels != 0 &&
+            OpusScrollWin95ContinuousPages(pane, pixels)) {
+            return 0;
+        }
+    }
     if (message == WM_LBUTTONDOWN) {
         POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
         bool top_marker = false;
@@ -1865,9 +2130,19 @@ LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
             DefWindowProcW(pane, message, w_param, l_param);
         HDC dc = GetDC(pane);
         if (dc != nullptr) {
+            update_current_page_snapshot(pane, dc);
+            draw_continuous_page_neighbors(pane, dc);
             draw_vertical_ruler(pane, dc);
             ReleaseDC(pane, dc);
         }
+        return result;
+    }
+    if (message == WM_SIZE) {
+        const LRESULT result = original != nullptr ?
+            CallWindowProcW(original, pane, message, w_param, l_param) :
+            DefWindowProcW(pane, message, w_param, l_param);
+        OpusRecenterWin95PageView(pane);
+        InvalidateRect(pane, nullptr, TRUE);
         return result;
     }
     if (message == WM_RBUTTONDOWN) {
@@ -1889,6 +2164,20 @@ LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
         return 0;
     }
     if (message == WM_NCDESTROY) {
+        if (g_document_wheel.pane == pane) {
+            g_document_wheel = {};
+        }
+        for (auto iterator = g_page_snapshots.begin();
+             iterator != g_page_snapshots.end();) {
+            if (iterator->pane == pane) {
+                if (iterator->bitmap != nullptr) {
+                    DeleteObject(iterator->bitmap);
+                }
+                iterator = g_page_snapshots.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
         RemovePropW(pane, kOriginalPaneProcProperty);
         if (original != nullptr) {
             SetWindowLongPtrW(pane, GWLP_WNDPROC,

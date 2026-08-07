@@ -99,6 +99,10 @@ extern int              vdbmgDevice;
 extern struct REB * vpreb;
 
 #ifdef OPUS_X64
+static int vWin95ZoomPercent = 100;
+static int vWin95BaseDxsInch = 0;
+static int vWin95BaseDysInch = 0;
+
 /* Read-only layout metrics used by the Win95 vertical ruler overlay. */
 int OpusGetWin95VerticalRulerMetrics(hwnd, pypPageTop, pypPageBottom,
 		pdypTopMargin, pdypBottomMargin, pdypInch)
@@ -121,6 +125,174 @@ int *pdypTopMargin, *pdypBottomMargin, *pdypInch;
 	*pdypTopMargin = DypFromDya(abs(pdod->dop.dyaTop));
 	*pdypBottomMargin = DypFromDya(abs(pdod->dop.dyaBottom));
 	*pdypInch = vfti.dypInch;
+	return fTrue;
+}
+
+/* Drive Page View by pixels so wheel/trackpad input can move continuously
+   through the inter-page gap instead of being reduced to scrollbar clicks. */
+int OpusScrollWin95ContinuousPages(hwnd, dypScroll)
+HWND hwnd;
+int dypScroll;
+{
+	int ww = WwFromHwnd(hwnd);
+	struct WWD *pwwd;
+
+	if (ww < wwDocMin || ww >= wwMac || dypScroll == 0)
+		return fFalse;
+	pwwd = PwwdWw(ww);
+	if (!pwwd->fPageView || pwwd->ipgd == ipgdNil)
+		return fFalse;
+	FScrollPageDyeHome(ww, dypScroll, fFalse, 0, fFalse);
+	return fTrue;
+}
+
+int OpusGetWin95ZoomPercent(hwnd)
+HWND hwnd;
+{
+	int ww = WwFromHwnd(hwnd);
+	return ww < wwDocMin || ww >= wwMac ? 100 : vWin95ZoomPercent;
+}
+
+int OpusGetWin95CurrentPageIndex(hwnd)
+HWND hwnd;
+{
+	int ww = WwFromHwnd(hwnd);
+	if (ww < wwDocMin || ww >= wwMac || !PwwdWw(ww)->fPageView)
+		return ipgdNil;
+	return PwwdWw(ww)->ipgd;
+}
+
+/* Change the screen mapping only.  Page layout continues to use the original
+   twip/printer measurements, while fonts, sheets, rulers, and hit testing are
+   regenerated at the requested display scale. */
+int OpusAdjustWin95Zoom(hwnd, dPercent)
+HWND hwnd;
+int dPercent;
+{
+	int ww = WwFromHwnd(hwnd);
+	int wwT, flmRestore, zoomNew;
+	struct WWD *pwwd;
+	struct DOD *pdod;
+	struct FTI *pftiScreen;
+
+	if (ww < wwDocMin || ww >= wwMac)
+		return vWin95ZoomPercent;
+	zoomNew = max(25, min(300, vWin95ZoomPercent + dPercent));
+	if (zoomNew == vWin95ZoomPercent)
+		return zoomNew;
+	if (vWin95BaseDxsInch <= 0)
+		vWin95BaseDxsInch = max(1,
+				NMultDiv(vfli.dxsInch, 100, vWin95ZoomPercent));
+	if (vWin95BaseDysInch <= 0)
+		vWin95BaseDysInch = max(1,
+				NMultDiv(vfli.dysInch, 100, vWin95ZoomPercent));
+
+	pwwd = PwwdWw(ww);
+	flmRestore = FlmDisplayFromFlags(pwwd->fDisplayAsPrint,
+			pwwd->fPageView, vpref.fDraftView);
+	pftiScreen = vsci.pfti;
+	if (pftiScreen != NULL)
+		FreeFontsPfti(pftiScreen);
+	SetFlm(flmIdle);
+	vWin95ZoomPercent = zoomNew;
+	vfli.dxsInch = max(1,
+			NMultDiv(vWin95BaseDxsInch, zoomNew, 100));
+	vfli.dysInch = max(1,
+			NMultDiv(vWin95BaseDysInch, zoomNew, 100));
+	SetFlm(flmRestore);
+	InvalFli();
+
+	for (wwT = wwDocMin; wwT < wwMac; ++wwT)
+		if (mpwwhwwd[wwT] != hNil)
+			{
+			int dypOldPage, dypOldStep, dypOldOffset;
+			int dypNewPage, dypNewStep, dypNewOffset, yeNew;
+			pwwd = PwwdWw(wwT);
+			if (!pwwd->fPageView || pwwd->ipgd == ipgdNil)
+				continue;
+			dypOldPage = DyOfRc(&pwwd->rcePage);
+			dypOldStep = max(1, dypOldPage +
+					max(8, dypGrayOutsideSci / 3));
+			dypOldOffset = YeTopPage(wwT) - pwwd->rcePage.yeTop;
+			pdod = PdodDoc(PmwdWw(wwT)->doc);
+			dypNewPage = DysFromDya(pdod->dop.yaPage);
+			dypNewStep = max(1, dypNewPage +
+					max(8, dypGrayOutsideSci / 3));
+			dypNewOffset = NMultDiv(dypOldOffset, dypNewStep,
+					dypOldStep);
+			yeNew = YeTopPage(wwT) - dypNewOffset;
+			PrcSet(&pwwd->rcePage, 0, 0,
+					DxsFromDxa(pwwd, pdod->dop.xaPage), dypNewPage);
+			MoveRc(&pwwd->rcePage, XeLeftPage(wwT), yeNew);
+			pwwd->xhScroll = pwwd->xeScroll;
+			pwwd->fDirty = pwwd->fDrDirty = fTrue;
+			pwwd->fBackgroundDirty = fTrue;
+			TrashWw(wwT);
+			}
+
+	if (ww == wwCur)
+		selCur.fUpdateRuler = fTrue;
+	RefreshPage(ww);
+	return zoomNew;
+}
+
+/* Pane resizing changes rcwDisp but the original Page View leaves the old
+   horizontal sheet coordinate untouched.  Recompute only that presentation
+   coordinate so document measurements and the vertical scroll position stay
+   intact. */
+int OpusRecenterWin95PageView(hwnd)
+HWND hwnd;
+{
+	int ww = WwFromHwnd(hwnd);
+	int xeLeft;
+	struct WWD *pwwd;
+
+	if (ww < wwDocMin || ww >= wwMac)
+		return fFalse;
+	pwwd = PwwdWw(ww);
+	if (!pwwd->fPageView || pwwd->ipgd == ipgdNil)
+		return fFalse;
+	xeLeft = XeLeftPage(ww);
+	if (pwwd->rcePage.xeLeft != xeLeft)
+		{
+		MoveRc(&pwwd->rcePage, xeLeft, pwwd->rcePage.yeTop);
+		pwwd->xhScroll = pwwd->xeScroll;
+		TrashWw(ww);
+		SyncSbHor(ww);
+		}
+	return fTrue;
+}
+
+/* Expose the physical sheet rectangle and adjacent-page availability to the
+   Win95 chrome.  The legacy display engine keeps one editable page live at a
+   time; the chrome uses these read-only values to paint the neighboring sheet
+   during a continuous-page scroll. */
+int OpusGetWin95ContinuousPageMetrics(hwnd, pxpPageLeft, pypPageTop,
+		pxpPageRight, pypPageBottom, pdypPageGap, pfHasPrevious,
+		pfHasNext)
+HWND hwnd;
+int *pxpPageLeft, *pypPageTop, *pxpPageRight, *pypPageBottom;
+int *pdypPageGap, *pfHasPrevious, *pfHasNext;
+{
+	int ww = WwFromHwnd(hwnd);
+	int ipgdMac;
+	struct WWD *pwwd;
+	struct DOD *pdod;
+
+	if (ww < wwDocMin || ww >= wwMac)
+		return fFalse;
+	pwwd = PwwdWw(ww);
+	if (!pwwd->fPageView || pwwd->ipgd == ipgdNil)
+		return fFalse;
+	pdod = PdodDoc(PmwdWw(ww)->doc);
+	ipgdMac = pdod->hplcpgd == hNil ? 0 : IMacPlc(pdod->hplcpgd);
+	*pxpPageLeft = pwwd->rcePage.xeLeft;
+	*pypPageTop = pwwd->rcePage.yeTop;
+	*pxpPageRight = pwwd->rcePage.xeRight;
+	*pypPageBottom = pwwd->rcePage.yeBottom;
+	*pdypPageGap = max(8, dypGrayOutsideSci / 3);
+	*pfHasPrevious = pwwd->ipgd > 0;
+	*pfHasNext = pwwd->ipgd + 1 < ipgdMac;
 	return fTrue;
 }
 

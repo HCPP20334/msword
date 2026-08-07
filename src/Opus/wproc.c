@@ -1734,6 +1734,25 @@ LONG      lParam;
 				return (LRESULT)MAKELONG((WORD)vibpProtect,
 						(WORD)vibp);
 				}
+			case 72:
+				return (LRESULT)PwwdWw(WwFromHwnd(hwnd))->ipgd;
+			case 73:
+				{
+				int wwQuery = WwFromHwnd(hwnd);
+				struct DOD *pdod = PdodDoc(PmwdWw(wwQuery)->doc);
+				return (LRESULT)(pdod->hplcpgd == hNil ? 0 :
+						IMacPlc(pdod->hplcpgd));
+				}
+			case 74:
+				return (LRESULT)PwwdWw(WwFromHwnd(hwnd))->rcePage.xeLeft;
+			case 75:
+				return (LRESULT)PwwdWw(WwFromHwnd(hwnd))->rcePage.yeTop;
+			case 76:
+				return (LRESULT)PwwdWw(WwFromHwnd(hwnd))->rcePage.xeRight;
+			case 77:
+				return (LRESULT)PwwdWw(WwFromHwnd(hwnd))->rcePage.yeBottom;
+			case 78:
+				return (LRESULT)OpusGetWin95ZoomPercent(hwnd);
 			}
 		return (LRESULT) -1;
 #endif

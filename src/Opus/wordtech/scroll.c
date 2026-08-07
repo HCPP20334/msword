@@ -51,6 +51,15 @@ extern int              wwCur;
 
 extern struct DR *PdrWw();
 
+#ifdef OPUS_X64
+/* Remember a completed end-of-document pagination probe.  The old engine was
+   written for page-at-a-time buttons and does not tolerate the same failed
+   next-page repagination being requested for every wheel tick. */
+static int vrgdocWin95NoNext[wwMax];
+static int vrgipgdWin95NoNext[wwMax];
+static CP vrgcpWin95NoNext[wwMax];
+#endif
+
 #ifdef WIN
 extern int              vlm;
 extern int              vflm;
@@ -1052,12 +1061,126 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 {
 	struct WWD *pwwd = PwwdWw(ww);
 	int dyeHome = pwwd->yeScroll - YeTopPage(ww);
+#ifndef OPUS_X64
 	int w;
 	BOOL fSmallPage = FSmallPage(ww, &w, &w);
+#else
+	int dypPage = DyOfRc(&pwwd->rcePage);
+	int dypPageGap = max(8, dypGrayOutsideSci / 3);
+	int yeHome = YeTopPage(ww);
+	int yeLastPage = min(yeHome,
+			pwwd->rcwDisp.ywBottom - dypPage - dypGrayOutsideSci);
+	int yeLimit;
+	int dyeRequested;
+	int dyeRemainder;
+	int docScroll;
+	int ipgdMacScroll;
+	CP cpMacScroll;
+#endif
 
 #ifdef WIN
 	int ipgdNew;
 #endif
+#ifdef OPUS_X64
+	/* Word 1.x normally swaps its single Page View display as soon as the
+	   current sheet reaches the viewport edge.  Let the sheet instead travel
+	   one full page plus a gray inter-page gap.  The Win95 chrome paints the
+	   adjacent sheet in that space; when it reaches the home position we hand
+	   the live layout to that page. */
+	if (dye >= 0)
+		{
+		dyeRequested = dye;
+		ipgdNew = IpgdNextWw(ww, fFalse);
+		/* Repaginate only when the following sheet is about to become visible.
+		   This avoids doing page layout on every ordinary line-scroll. */
+		if (ipgdNew == ipgdNil &&
+				pwwd->yeScroll - dye <= yeLastPage)
+			{
+			docScroll = PmwdWw(ww)->doc;
+			cpMacScroll = CpMacDocEdit(docScroll);
+			ipgdMacScroll = IMacPlc(PdodDoc(docScroll)->hplcpgd);
+			if (vrgdocWin95NoNext[ww] != docScroll ||
+					vrgipgdWin95NoNext[ww] != pwwd->ipgd + 1 ||
+					vrgcpWin95NoNext[ww] != cpMacScroll)
+				{
+				/* Once the page table already contains multiple pages, its
+				   active last page is authoritative.  Typing/background layout
+				   extends that table when content grows; a wheel tick must not
+				   re-enter pagination on the live last-page descriptors. */
+				if (ipgdMacScroll > 1 &&
+						pwwd->ipgd + 1 >= ipgdMacScroll)
+					ipgdNew = ipgdNil;
+				else
+					ipgdNew = IpgdNextWw(ww, fTrue);
+				if (ipgdNew == ipgdNil)
+					{
+					vrgdocWin95NoNext[ww] = docScroll;
+					vrgipgdWin95NoNext[ww] = pwwd->ipgd + 1;
+					vrgcpWin95NoNext[ww] = cpMacScroll;
+					}
+				}
+			}
+		yeLimit = (!fNoNewPage && ipgdNew != ipgdNil) ?
+				yeHome - dypPage - dypPageGap : yeLastPage;
+		if ((ncp & ncpForceYPos) == 0)
+			dye = min(dye, max(0, pwwd->yeScroll - yeLimit));
+		if (dyeHome > 0 && fHome)
+			dye = min(dye, dyeHome);
+		dyeRemainder = max(0, dyeRequested - dye);
+		if (dye <= 0)
+			{
+			if (fNoNewPage)
+				return fTrue;
+			if (ipgdNew != ipgdNil)
+				SetPageDisp(ww, ipgdNew, yeHome, fFalse, fFalse);
+			else
+				Beep();
+			return fTrue;
+			}
+		ScrollPageDye(ww, dye);
+		if (!fNoNewPage && ipgdNew != ipgdNil &&
+				PwwdWw(ww)->yeScroll <= yeLimit)
+			{
+			SetPageDisp(ww, ipgdNew, yeHome, fFalse, fFalse);
+			if (dyeRemainder > 0)
+				FScrollPageDyeHome(ww, dyeRemainder, fFalse, ncp,
+						fFalse);
+			return fTrue;
+			}
+		}
+	else
+		{
+		dyeRequested = -dye;
+		ipgdNew = IpgdPrevWw(ww);
+		yeLimit = (!fNoNewPage && ipgdNew != ipgdNil) ?
+				yeHome + dypPage + dypPageGap : yeHome;
+		dye = min(-dye, max(0, yeLimit - pwwd->yeScroll));
+		if (dyeHome < 0 && fHome)
+			dye = min(dye, -dyeHome);
+		dyeRemainder = max(0, dyeRequested - dye);
+		if (dye <= 0)
+			{
+			if (fNoNewPage)
+				return fTrue;
+			if (ipgdNew != ipgdNil)
+				SetPageDisp(ww, ipgdNew, yeHome, fFalse, fFalse);
+			else
+				Beep();
+			return fTrue;
+			}
+		ScrollPageDye(ww, -dye);
+		if (!fNoNewPage && ipgdNew != ipgdNil &&
+				PwwdWw(ww)->yeScroll >= yeLimit)
+			{
+			SetPageDisp(ww, ipgdNew, yeHome, fFalse, fFalse);
+			if (dyeRemainder > 0)
+				FScrollPageDyeHome(ww, -dyeRemainder, fFalse, ncp,
+						fFalse);
+			return fTrue;
+			}
+		}
+	return fFalse;
+#else /* !OPUS_X64 */
 	if (dye >= 0)
 		{
 		if ((ncp & ncpForceYPos) == 0)
@@ -1110,6 +1233,7 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 			}
 		}
 	return fFalse;
+#endif /* OPUS_X64 */
 }
 
 
@@ -1121,16 +1245,20 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 /* %%Function:ScrollPageDye %%Owner:bryanl */
 ScrollPageDye(ww, dye)
 {
+#ifndef OPUS_X64
 	int w;
+#endif
 
 	Assert(cHpFreeze == 0);
 	vfLastScroll = fTrue;
 	Assert(PwwdWw(ww)->fPageView);
+#ifndef OPUS_X64
 	if (FSmallPage(ww, &w, &w))
 		{ 
 		Beep(); 
 		return; 
 		}
+#endif
 
 	ClearInsertLine(&selCur);
 	ClearInsertLine(&selDotted);
@@ -1275,24 +1403,50 @@ int ww, dqThumb, dqThumbOld;
 			"want" to be.  That is compared with the current
 			scroll and, presto, we scroll */
 		pwwd = PwwdWw(ww);
+#ifdef OPUS_X64
+		if (ipgd == ipgdNil)
+			{
+			int yeHome = YeTopPage(ww);
+			int yeLastPage = min(yeHome, pwwd->rcwDisp.ywBottom -
+					DyOfRc(&pwwd->rcePage) - dypGrayOutsideSci);
+			dyeScrollMac = max(0, yeHome - yeLastPage);
+			}
+		else
+			dyeScrollMac = DyOfRc(&pwwd->rcePage) +
+					max(8, dypGrayOutsideSci / 3);
+		dyeScrollOld = min(dyeScrollMac,
+				max(0, YeTopPage(ww) - pwwd->rcePage.yeTop));
+#else
 		dyeScrollMac = DyOfRc(&pwwd->rcePage) - DyOfRc(&pwwd->rcwDisp);
 		dyeScrollOld = max(0, -pwwd->rcePage.yeTop);
+#endif
 		dqCurPage = DqRatio(cpCurPage, dqMax - dqPgvwElevSpace, cpMac);
 		dqNextPage = DqRatio(cpNextPage, dqMax - dqPgvwElevSpace, cpMac);
 		dyeScrollNew = NMultDiv(min(dqThumb - dqCurPage, dqNextPage - dqCurPage),
 				dyeScrollMac, max(1, dqNextPage - dqCurPage));
+#ifdef OPUS_X64
+		dyeScrollNew = min(dyeScrollMac, max(0, dyeScrollNew));
+#else
 		dyeScrollNew = max(-YeTopPage(ww), dyeScrollNew);
+#endif
 		if (dqThumb > dqThumbOld)
 			{
+#ifdef OPUS_X64
+			dye = dyeScrollNew - dyeScrollOld;
+#else
 			dyeT = pwwd->rcePage.yeBottom + pwwd->rcwDisp.ywTop
 					- pwwd->rcwDisp.ywBottom;
 			dye = min(dyeT, dyeScrollNew - dyeScrollOld);
+#endif
 			if (dye > 0)
 				ScrollPageDye(ww, dye);
 			}
 		else
 			{
 /* move up on the page (move text down, looking at higher portions of page) */
+#ifdef OPUS_X64
+			dye = dyeScrollOld - dyeScrollNew;
+#else
 			if (cpCurPage == cp0 && pwwd->rcePage.yeTop
 					>= YeTopPage(ww))
 				dye = -pwwd->rcePage.yeTop + dypGrayOutsideSci;
@@ -1301,6 +1455,7 @@ int ww, dqThumb, dqThumbOld;
 				dyeT = pwwd->ywMin - pwwd->rcePage.yeTop;
 				dye = min(dyeT, dyeScrollOld - dyeScrollNew);
 				}
+#endif
 			if (dye > 0)
 				ScrollPageDye(ww, -dye);
 			}
@@ -1680,7 +1835,13 @@ ScrollWwDyw(ww, dyw, ywTop)
 
 /* InvalWwRc will not work because rcePage has not been offset yet, 
 it is done in caller */
+#ifdef OPUS_X64
+	/* DrawBlankPage and the Win95 neighbor overlay repaint the uncovered strip;
+	   suppress a separate background erase that otherwise flashes gray first. */
+	InvalidateRect(PwwdWw(ww)->hwnd, (LPRECT)&rcwUpdate, fFalse);
+#else
 	InvalidateRect(PwwdWw(ww)->hwnd, (LPRECT)&rcwUpdate, fTrue);
+#endif
 }
 
 
