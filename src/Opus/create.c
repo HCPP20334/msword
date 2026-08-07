@@ -1692,7 +1692,7 @@ uns cbTotal;
 
 /*  %%Function:HplReadPlf %%Owner:peterj  */
 /* H P L  R E A D  P L F */
-HplReadPlf(fn, fcFirst, cb)
+struct PL **HplReadPlf(fn, fcFirst, cb)
 int     fn;
 FC      fcFirst;
 int     cb;
@@ -1714,7 +1714,7 @@ int     cb;
 
 /*  %%Function:HsttbReadSttbFromFile %%Owner:peterj  */
 /* H S T T B  R E A D  S T T B F  F R O M  F I L E */
-HsttbReadSttbfFromFile(fn, fc, fExternal, fStyleRules, cbExtra)
+struct STTB **HsttbReadSttbfFromFile(fn, fc, fExternal, fStyleRules, cbExtra)
 int     fn;
 FC      fc;
 BOOL    fExternal, fStyleRules;

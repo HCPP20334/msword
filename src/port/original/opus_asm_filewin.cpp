@@ -1,7 +1,12 @@
 #include "opus_x64_compat.h"
 
+#ifdef OpenFile
+#undef OpenFile
+#endif
+
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 
 /* AMD64 translation of FILEWINN.ASM.  Word continues to open files through
@@ -45,6 +50,42 @@ struct NativeBptbPrefix {
 extern "C" {
 
 extern NativeBptbPrefix vbptbExt;
+
+int OpusOpenFile(const LPCSTR file_name, void* const legacy_ofs,
+                 const UINT style) {
+    struct LegacyOfStruct {
+        int byte_count : 8;
+        int fixed_disk : 8;
+        WORD error_code;
+        BYTE reserved[4];
+        CHAR path[120];
+    };
+
+    if (legacy_ofs == nullptr) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return HFILE_ERROR;
+    }
+
+    auto* const legacy = static_cast<LegacyOfStruct*>(legacy_ofs);
+    OFSTRUCT native_ofs{};
+    native_ofs.cBytes = sizeof(native_ofs);
+    native_ofs.fFixedDisk = legacy->fixed_disk;
+    native_ofs.nErrCode = legacy->error_code;
+    std::memcpy(&native_ofs.Reserved1, legacy->reserved,
+                sizeof(legacy->reserved));
+    lstrcpynA(native_ofs.szPathName, legacy->path,
+              static_cast<int>(std::size(native_ofs.szPathName)));
+
+    const HFILE result = OpenFile(file_name, &native_ofs, style);
+    legacy->byte_count = native_ofs.cBytes;
+    legacy->fixed_disk = native_ofs.fFixedDisk;
+    legacy->error_code = native_ofs.nErrCode;
+    std::memcpy(legacy->reserved, &native_ofs.Reserved1,
+                sizeof(legacy->reserved));
+    lstrcpynA(legacy->path, native_ofs.szPathName,
+              static_cast<int>(std::size(legacy->path)));
+    return result;
+}
 
 int FCloseDoshnd(const HFILE file) {
     if (file == HFILE_ERROR) {

@@ -473,7 +473,13 @@ int fDelete;    /* delete the file */
 /* the sad truth is that we couldn't care less whether the file is deleted;
 	better to let the user see temp files than warn him the delete failed */
 	if (fDelete)
+		{
+#ifdef OPUS_X64
+		EcOsDelete(st, 0); /* volume is unused by the Windows implementation */
+#else
 		EcOsDelete(st, vol);
+#endif
+		}
 }       /* end DeleteFn */
 
 

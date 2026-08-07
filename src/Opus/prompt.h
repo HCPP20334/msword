@@ -92,7 +92,17 @@ struct PPR
 
 #define MmoFromCmg(cmg) ((cmg) & mmoNewestCmg)
 
+#ifndef OPUS_X64
 struct PPR **HpprStartProgressReport();
+#endif
+#ifdef OPUS_X64
+/* The AMD64 prompt implementation lives in opus_asm_prompt.cpp.  A complete
+   prototype is required here: with an unprototyped call, a literal NULL in
+   the fifth argument only initializes part of the native pointer stack slot. */
+void ProgressReportPercent(struct PPR **hppr, long lLow, long lHigh,
+		long l, long *plNext);
+void ChangeProgressReport(struct PPR **hppr, unsigned nNew);
+#endif
 NATIVE FQueryAbortCheckProc();
 EXPORT AdjustPrompt();
 

@@ -59,6 +59,20 @@ BOOL OpusChangeMenu(HMENU menu, UINT item, const void *new_text,
 #ifdef OPUS_X64
 #define DeleteAtom OpusDeleteAtom
 void OpusDeleteAtom(ATOM atom);
+
+/* Win16 OFSTRUCT reserved 120 bytes for its path, while the current SDK's
+ * OFSTRUCT reserves 128.  Passing Word's original structure directly to
+ * OpenFileA lets the API overwrite eight bytes beyond the caller's buffer.
+ * Marshal through a native OFSTRUCT so legacy file open/reopen behavior is
+ * preserved without corrupting the stack. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+HFILE OpusOpenFile(LPCSTR file_name, void *legacy_ofs, UINT style);
+#ifdef __cplusplus
+}
+#endif
+#define OpenFile OpusOpenFile
 #endif
 
 /* Several original translation units define NOGDI to trim the Win16 header,

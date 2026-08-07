@@ -24,6 +24,7 @@ extern "C" int OpusAdjustWin95Zoom(HWND pane, int percent_delta);
 extern "C" int OpusRecenterWin95PageView(HWND pane);
 extern "C" int OpusSetWin95VerticalMargin(
     HWND pane, int top_margin, int margin_pixels);
+extern "C" int OpusApplyWin95TextColor(HWND pane, int color_index);
 extern "C" int OpusGetWin95HorizontalRulerMetrics(
     HWND ruler, int* zero, int* active_left, int* active_right,
     int* pixels_per_inch, int* left_indent, int* first_indent,
@@ -42,6 +43,7 @@ constexpr wchar_t kRulerOverlayClass[] = L"OpusWin95RulerOverlay";
 constexpr int kToolbarBitmap = 201;
 constexpr int kSpriteCell = 20;
 constexpr COLORREF kButtonFace = RGB(192, 192, 192);
+constexpr UINT_PTR kMenuRepaintTimer = 0x7f51;
 constexpr COLORREF kButtonShadow = RGB(128, 128, 128);
 constexpr COLORREF kButtonDarkShadow = RGB(0, 0, 0);
 constexpr COLORREF kButtonHighlight = RGB(255, 255, 255);
@@ -52,6 +54,7 @@ constexpr UINT kComboSize = 0x7503;
 constexpr UINT kComboZoom = 0x7504;
 constexpr UINT kCmdToggleStandardToolbar = 0x7101;
 constexpr UINT kCmdToggleFormattingToolbar = 0x7102;
+constexpr UINT kCmdTextColorBase = 0x7200;
 constexpr UINT_PTR kSyncTimer = 0x951;
 constexpr wchar_t kOriginalPaneProcProperty[] = L"OpusWord95OriginalPaneProc";
 
@@ -153,6 +156,8 @@ struct ToolbarState {
     bool formatting_visible = true;
     bool startup_page_view_requested = false;
     int ruler_refreshes_remaining = 0;
+    int text_color_index = 0;
+    COLORREF text_color = RGB(0, 0, 0);
     HitResult pressed{};
     std::array<bool, kStandardButtons.size()> standard_latched{};
     std::array<bool, kFormatButtons.size()> format_latched{};
@@ -242,6 +247,18 @@ void style_menu_tree(HMENU menu) {
     for (int index = 0; index < count; ++index) {
         style_menu_tree(GetSubMenu(menu, index));
     }
+}
+
+BOOL CALLBACK repaint_menu_popup(HWND window, LPARAM) {
+    wchar_t class_name[32]{};
+    GetClassNameW(window, class_name,
+                  static_cast<int>(std::size(class_name)));
+    if (lstrcmpW(class_name, L"#32768") == 0 && IsWindowVisible(window)) {
+        RedrawWindow(window, nullptr, nullptr,
+                     RDW_ERASE | RDW_INVALIDATE | RDW_UPDATENOW |
+                         RDW_ALLCHILDREN | RDW_FRAME);
+    }
+    return TRUE;
 }
 
 void configure_word95_menus(HWND window) {
@@ -591,7 +608,8 @@ void draw_alignment(HDC dc, RECT area, FormatGlyph glyph) {
 }
 
 void draw_format_glyph(HWND toolbar, HDC dc, const FormatButton& spec,
-                       RECT rect, bool sunken, HDC sprite_dc) {
+                       RECT rect, bool sunken, HDC sprite_dc,
+                       COLORREF text_color) {
     const int offset = sunken ? scale(toolbar, 1) : 0;
     RECT area{rect.left + scale(toolbar, 4) + offset,
               rect.top + scale(toolbar, 4) + offset,
@@ -623,7 +641,7 @@ void draw_format_glyph(HWND toolbar, HDC dc, const FormatButton& spec,
         SelectObject(dc, old_font);
         DeleteObject(font);
         if (spec.glyph == FormatGlyph::color) {
-            HBRUSH swatch = CreateSolidBrush(RGB(255, 255, 0));
+            HBRUSH swatch = CreateSolidBrush(text_color);
             RECT swatch_rect{area.left + 1, area.bottom - 3,
                              area.right - 1, area.bottom};
             FillRect(dc, &swatch_rect, swatch);
@@ -740,7 +758,8 @@ void paint_toolbar(HWND toolbar, ToolbarState& state) {
                  state.pressed.index == index) || state.format_latched[index];
             draw_classic_edge(dc, rect, down);
             draw_format_glyph(toolbar, dc, kFormatButtons[index], rect, down,
-                              state.sprite != nullptr ? sprite_dc : nullptr);
+                               state.sprite != nullptr ? sprite_dc : nullptr,
+                               state.text_color);
         }
     }
     if (old_bitmap != nullptr) {
@@ -932,6 +951,116 @@ void restore_document_focus_from_root(HWND root) {
     if (pane != nullptr) {
         SetFocus(pane);
     }
+}
+
+HBITMAP create_color_menu_swatch(HWND owner, COLORREF color,
+                                 bool automatic) {
+    HDC screen = GetDC(owner);
+    if (screen == nullptr) {
+        return nullptr;
+    }
+    const int size = scale(owner, 14);
+    HBITMAP bitmap = CreateCompatibleBitmap(screen, size, size);
+    HDC memory = CreateCompatibleDC(screen);
+    HBITMAP previous = bitmap != nullptr ? static_cast<HBITMAP>(
+        SelectObject(memory, bitmap)) : nullptr;
+    if (bitmap != nullptr) {
+        RECT bounds{0, 0, size, size};
+        FillRect(memory, &bounds, GetSysColorBrush(COLOR_MENU));
+        RECT swatch{scale(owner, 2), scale(owner, 2),
+                    size - scale(owner, 1), size - scale(owner, 1)};
+        HBRUSH fill = CreateSolidBrush(color);
+        FillRect(memory, &swatch, fill);
+        DeleteObject(fill);
+        FrameRect(memory, &swatch,
+                  static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        if (automatic) {
+            HPEN pen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+            HPEN old_pen = static_cast<HPEN>(SelectObject(memory, pen));
+            MoveToEx(memory, swatch.left + 1, swatch.bottom - 2, nullptr);
+            LineTo(memory, swatch.right - 1, swatch.top + 1);
+            SelectObject(memory, old_pen);
+            DeleteObject(pen);
+        }
+        SelectObject(memory, previous);
+    }
+    DeleteDC(memory);
+    ReleaseDC(owner, screen);
+    return bitmap;
+}
+
+void show_text_color_palette(HWND app, HWND toolbar) {
+    ToolbarState* state = toolbar_state(toolbar);
+    if (state == nullptr) {
+        return;
+    }
+    struct Choice {
+        int index;
+        COLORREF color;
+        const wchar_t* name;
+    };
+    const std::array<Choice, 9> choices{{
+        {0, RGB(0, 0, 0), L"Automatic"},
+        {1, RGB(0, 0, 0), L"Black"},
+        {2, RGB(0, 0, 255), L"Blue"},
+        {3, RGB(0, 255, 255), L"Cyan"},
+        {4, RGB(0, 128, 0), L"Green"},
+        {5, RGB(255, 0, 255), L"Magenta"},
+        {6, RGB(255, 0, 0), L"Red"},
+        {7, RGB(255, 255, 0), L"Yellow"},
+        {8, RGB(255, 255, 255), L"White"},
+    }};
+
+    HMENU popup = CreatePopupMenu();
+    if (popup == nullptr) {
+        return;
+    }
+    std::vector<HBITMAP> swatches;
+    swatches.reserve(choices.size());
+    for (const auto& choice : choices) {
+        const UINT command = kCmdTextColorBase + choice.index;
+        AppendMenuW(popup, MF_STRING, command, choice.name);
+        HBITMAP swatch = create_color_menu_swatch(
+            toolbar, choice.color, choice.index == 0);
+        swatches.push_back(swatch);
+        if (swatch != nullptr) {
+            SetMenuItemBitmaps(popup, command, MF_BYCOMMAND, swatch, swatch);
+        }
+        if (choice.index == state->text_color_index) {
+            CheckMenuItem(popup, command, MF_BYCOMMAND | MF_CHECKED);
+        }
+    }
+    style_menu_tree(popup);
+
+    RECT anchor = format_button_rect(toolbar, *state, 3);
+    POINT point{anchor.left, anchor.bottom};
+    ClientToScreen(toolbar, &point);
+    const UINT selected = TrackPopupMenu(
+        popup, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
+        point.x, point.y, 0, app, nullptr);
+    if (selected >= kCmdTextColorBase &&
+        selected < kCmdTextColorBase + choices.size()) {
+        const int index = static_cast<int>(selected - kCmdTextColorBase);
+        HWND pane = nullptr;
+        EnumChildWindows(app, find_document_pane,
+                         reinterpret_cast<LPARAM>(&pane));
+        if (pane != nullptr &&
+            OpusApplyWin95TextColor(pane, choices[index].index)) {
+            state->text_color_index = choices[index].index;
+            state->text_color = choices[index].color;
+            InvalidateRect(toolbar, nullptr, FALSE);
+            UpdateWindow(toolbar);
+        } else {
+            MessageBeep(MB_ICONEXCLAMATION);
+        }
+    }
+    DestroyMenu(popup);
+    for (HBITMAP swatch : swatches) {
+        if (swatch != nullptr) {
+            DeleteObject(swatch);
+        }
+    }
+    restore_document_focus_from_root(app);
 }
 
 void forward_combo(HWND mirror, HWND source, int notification,
@@ -2371,6 +2500,10 @@ LRESULT CALLBACK app_window_proc(HWND app, UINT message,
             }
             g_word95_page_view_active = true;
         }
+        if (command == bcmColor) {
+            show_text_color_palette(app, toolbar);
+            return 0;
+        }
         if (command == kCmdToggleStandardToolbar) {
             toggle_toolbar_row(app, toolbar, true);
             return 0;
@@ -2385,6 +2518,15 @@ LRESULT CALLBACK app_window_proc(HWND app, UINT message,
         if (state != nullptr) {
             update_toolbar_menu_checks(app, *state);
         }
+        /* On current Windows versions a popup using a classic background
+           brush can receive its initial erase before the menu items have
+           been invalidated.  Repaint once the #32768 popup exists so the
+           complete File menu is visible without requiring mouse hover. */
+        SetTimer(app, kMenuRepaintTimer, 15, nullptr);
+    } else if (message == WM_TIMER && w_param == kMenuRepaintTimer) {
+        KillTimer(app, kMenuRepaintTimer);
+        EnumThreadWindows(GetCurrentThreadId(), repaint_menu_popup, 0);
+        return 0;
     } else if (message == WM_NCDESTROY) {
         g_original_app_proc = nullptr;
         if (original != nullptr) {

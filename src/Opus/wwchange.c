@@ -113,6 +113,9 @@ extern int              vfTableKeymap;
 extern HWND		vhwndMsgBoxParent;
 extern struct UAB       vuab;
 extern int              dclMac;
+#ifdef OPUS_X64
+extern int OpusWin95DisplayAlias();
+#endif
 extern CHAR             szApp[];
 extern HBRUSH           vhbrGray;
 extern int              mwMac;
@@ -963,7 +966,6 @@ int  nfo;
 *
 *
 */
-
 
 /* %%Function:FNormalizeSzFile %%Owner:chic */
 FNormalizeSzFile( szFile, szNormal, nfo )
@@ -2015,6 +2017,9 @@ int rgmw[], imwMac;
 
 	Assert(doc != docNil);
 	GetDocSt(doc, st, gdsoRelative);
+#ifdef OPUS_X64
+	OpusWin95DisplayAlias(st);
+#endif
 
 	if (imwMac > 1)
 		/* compute imw of mw and append :<imw+1> */

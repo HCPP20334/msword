@@ -1,10 +1,12 @@
 #include "opus_x64_compat.h"
 #include "opus_x64_heap.h"
+#include <commdlg.h>
 extern "C" {
 #include "dac.h"
 }
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -116,6 +118,82 @@ OriginalListProc g_list_character_color = nullptr;
 FontValueProc g_font_name_to_value = nullptr;
 FontValueProc g_font_size_to_value = nullptr;
 FontNameFromValueProc g_font_name_from_value = nullptr;
+
+struct Win95SaveAlias {
+    bool active = false;
+    bool created = false;
+    std::string selected_path;
+    std::string legacy_path;
+};
+
+Win95SaveAlias g_win95_save_alias;
+std::unordered_map<std::string, std::string> g_win95_saved_aliases;
+
+struct Win95AliasCleanup {
+    ~Win95AliasCleanup() {
+        if (g_win95_save_alias.created &&
+            !g_win95_save_alias.legacy_path.empty()) {
+            DeleteFileA(g_win95_save_alias.legacy_path.c_str());
+        }
+        for (const auto& saved : g_win95_saved_aliases) {
+            DeleteFileA(saved.first.c_str());
+        }
+    }
+};
+
+Win95AliasCleanup g_win95_alias_cleanup;
+
+std::string win95_alias_key(std::string path) {
+    std::transform(path.begin(), path.end(), path.begin(),
+                   [](const unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    return path;
+}
+
+bool make_win95_staging_path(std::string& path) {
+    char module_path[32768]{};
+    const DWORD module_length = GetModuleFileNameA(
+        nullptr, module_path, static_cast<DWORD>(std::size(module_path)));
+    if (module_length == 0 || module_length >= std::size(module_path)) {
+        return false;
+    }
+    char* separator = std::strrchr(module_path, '\\');
+    if (separator == nullptr) {
+        return false;
+    }
+    *separator = '\0';
+    std::string directory = std::string(module_path) + "\\W95TEMP";
+    if (!CreateDirectoryA(directory.c_str(), nullptr) &&
+        GetLastError() != ERROR_ALREADY_EXISTS) {
+        return false;
+    }
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        char temporary[MAX_PATH]{};
+        if (GetTempFileNameA(directory.c_str(), "W95", 0, temporary) == 0) {
+            return false;
+        }
+        DeleteFileA(temporary);
+        char* extension = std::strrchr(temporary, '.');
+        if (extension != nullptr) {
+            lstrcpyA(extension, ".DOC");
+        }
+        if (GetFileAttributesA(temporary) == INVALID_FILE_ATTRIBUTES &&
+            std::strlen(temporary) < 120) {
+            path = temporary;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string counted_path(const unsigned char* st_file) {
+    if (st_file == nullptr || st_file[0] == 0 || st_file[0] >= 120) {
+        return {};
+    }
+    return std::string(reinterpret_cast<const char*>(st_file + 1),
+                       st_file[0]);
+}
 
 constexpr Word kDlmInit = 0x0001;
 constexpr Word kDlmTerm = 0x0003;
@@ -2022,6 +2100,181 @@ void handle_dialog_command(const Hdlg handle, const WPARAM w_param,
     }
 }
 
+Tmc run_word95_common_file_dialog(DialogState& dialog) {
+    const bool opening = dialog.hid == kIddOpen;
+    const bool saving = dialog.hid == kIddSaveAs;
+    if (!opening && !saving) {
+        return static_cast<Tmc>(-1);
+    }
+
+    invoke_dialog_proc(dialog, kDlmInit, dialog.focus);
+    dialog.commands_active = true;
+    if (opening) {
+        read_open_cab(dialog);
+    } else {
+        read_save_cab(dialog);
+    }
+
+    HWND owner = dialog.window != nullptr ?
+        GetWindow(dialog.window, GW_OWNER) : nullptr;
+    if (owner == nullptr || !IsWindow(owner)) {
+        owner = vhWndMsgBoxParent;
+    }
+
+    std::vector<char> file_buffer(32768, '\0');
+    std::string initial = opening ?
+        dialog.controls[kTmcOpenFileName].text :
+        dialog.controls[kTmcSaveFile].text;
+    const auto initial_alias =
+        g_win95_saved_aliases.find(win95_alias_key(initial));
+    if (initial_alias != g_win95_saved_aliases.end()) {
+        initial = initial_alias->second;
+    }
+    establish_open_directory(dialog, initial.empty() ? "*.*" : initial);
+    if (initial.find_first_of("*?") == std::string::npos) {
+        lstrcpynA(file_buffer.data(), initial.c_str(),
+                  static_cast<int>(file_buffer.size()));
+    }
+
+    std::string default_extension = "doc";
+    const std::size_t slash = initial.find_last_of("\\/");
+    const std::size_t dot = initial.find_last_of('.');
+    if (dot != std::string::npos &&
+        (slash == std::string::npos || dot > slash) &&
+        dot + 1 < initial.size()) {
+        default_extension = initial.substr(dot + 1);
+    }
+
+    static const char open_filter[] =
+        "Word Documents (*.doc;*.dot)\0*.doc;*.dot\0"
+        "Rich Text Format (*.rtf)\0*.rtf\0"
+        "Text Files (*.txt)\0*.txt\0"
+        "All Files (*.*)\0*.*\0\0";
+    static const char save_filter[] =
+        "Word Documents (*.doc)\0*.doc\0"
+        "Document Templates (*.dot)\0*.dot\0"
+        "All Files (*.*)\0*.*\0\0";
+
+    Tmc result = kTmcCancel;
+    for (;;) {
+        OPENFILENAMEA file_dialog{};
+        file_dialog.lStructSize = sizeof(file_dialog);
+        file_dialog.hwndOwner = owner;
+        file_dialog.lpstrFilter = opening ? open_filter : save_filter;
+        file_dialog.nFilterIndex = 1;
+        file_dialog.lpstrFile = file_buffer.data();
+        file_dialog.nMaxFile = static_cast<DWORD>(file_buffer.size());
+        file_dialog.lpstrInitialDir = dialog.current_directory.empty() ?
+            nullptr : dialog.current_directory.c_str();
+        file_dialog.lpstrTitle = opening ? "Open" : "Save As";
+        file_dialog.lpstrDefExt = default_extension.c_str();
+        file_dialog.Flags = OFN_EXPLORER | OFN_ENABLESIZING |
+            OFN_LONGNAMES | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
+        if (opening) {
+            file_dialog.Flags |= OFN_FILEMUSTEXIST;
+            if (dialog.controls[kTmcOpenReadOnly].value != 0) {
+                file_dialog.Flags |= OFN_READONLY;
+            }
+        } else {
+            file_dialog.Flags |= OFN_NOREADONLYRETURN |
+                                 OFN_OVERWRITEPROMPT;
+        }
+
+        const BOOL accepted = opening ?
+            GetOpenFileNameA(&file_dialog) : GetSaveFileNameA(&file_dialog);
+        if (!accepted) {
+            if (CommDlgExtendedError() != 0) {
+                MessageBoxA(owner,
+                    "The Windows file dialog could not be opened.",
+                    opening ? "Open" : "Save As",
+                    MB_OK | MB_ICONEXCLAMATION);
+                result = static_cast<Tmc>(-1);
+            } else {
+                invoke_dialog_proc(dialog, kDlmTerm, kTmcCancel);
+                result = kTmcCancel;
+            }
+            break;
+        }
+
+        const std::string selected_path = file_buffer.data();
+        std::string legacy_path;
+        if (!make_win95_staging_path(legacy_path)) {
+            MessageBoxA(owner,
+                "Word could not prepare a temporary document file.",
+                opening ? "Open" : "Save As",
+                MB_OK | MB_ICONEXCLAMATION);
+            continue;
+        }
+        if (opening &&
+            !CopyFileA(selected_path.c_str(), legacy_path.c_str(), FALSE)) {
+            MessageBoxA(owner, "Word could not open the selected file.",
+                        "Open", MB_OK | MB_ICONEXCLAMATION);
+            continue;
+        }
+
+        establish_open_directory(dialog, selected_path);
+        if (opening) {
+            g_win95_saved_aliases[win95_alias_key(legacy_path)] =
+                selected_path;
+            auto& edit = dialog.controls[kTmcOpenFileName];
+            edit.text = legacy_path;
+            if (edit.window != nullptr) {
+                SetWindowTextA(edit.window, edit.text.c_str());
+            }
+            auto& read_only = dialog.controls[kTmcOpenReadOnly];
+            read_only.value =
+                (file_dialog.Flags & OFN_READONLY) != 0;
+            if (read_only.window != nullptr) {
+                SendMessageA(read_only.window, BM_SETCHECK,
+                    read_only.value ? BST_CHECKED : BST_UNCHECKED, 0);
+            }
+            sync_open_cab(dialog);
+        } else {
+            g_win95_save_alias.active = true;
+            g_win95_save_alias.created = true;
+            g_win95_save_alias.selected_path = selected_path;
+            g_win95_save_alias.legacy_path = legacy_path;
+            auto& edit = dialog.controls[kTmcSaveFile];
+            edit.text = legacy_path;
+            if (edit.window != nullptr) {
+                SetWindowTextA(edit.window, edit.text.c_str());
+            }
+            sync_save_cab(dialog);
+        }
+
+        if (invoke_dialog_proc(dialog, kDlmTerm, kTmcOk)) {
+            result = dialog.dying ? dialog.result_tmc : kTmcOk;
+            if (saving && result != kTmcOk) {
+                if (g_win95_save_alias.created) {
+                    DeleteFileA(g_win95_save_alias.legacy_path.c_str());
+                }
+                g_win95_save_alias = {};
+            }
+            break;
+        }
+        if (dialog.dying) {
+            result = dialog.result_tmc;
+            if (saving) {
+                if (g_win95_save_alias.created) {
+                    DeleteFileA(g_win95_save_alias.legacy_path.c_str());
+                }
+                g_win95_save_alias = {};
+            }
+            break;
+        }
+        if (saving) {
+            if (g_win95_save_alias.created) {
+                DeleteFileA(g_win95_save_alias.legacy_path.c_str());
+            }
+            g_win95_save_alias = {};
+        }
+    }
+
+    dialog.commands_active = false;
+    invoke_dialog_proc(dialog, kDlmExit, result);
+    return result;
+}
+
 LRESULT CALLBACK native_dialog_window_proc(const HWND window,
                                            const UINT message,
                                            const WPARAM w_param,
@@ -2061,6 +2314,90 @@ LRESULT CALLBACK native_dialog_window_proc(const HWND window,
 }  // namespace
 
 extern "C" {
+
+int OpusWin95SaveAliasMatches(const unsigned char* st_file) {
+    const std::string path = counted_path(st_file);
+    if (path.empty()) {
+        return false;
+    }
+    if (g_win95_save_alias.active &&
+        _stricmp(path.c_str(),
+                 g_win95_save_alias.legacy_path.c_str()) == 0) {
+        return true;
+    }
+    return g_win95_saved_aliases.find(win95_alias_key(path)) !=
+           g_win95_saved_aliases.end();
+}
+
+int OpusWin95DisplayAlias(unsigned char* const st_file) {
+    const std::string path = counted_path(st_file);
+    if (path.empty()) {
+        return false;
+    }
+    auto saved = g_win95_saved_aliases.find(win95_alias_key(path));
+    if (saved == g_win95_saved_aliases.end()) {
+        char full_path[32768]{};
+        const DWORD length = GetFullPathNameA(
+            path.c_str(), static_cast<DWORD>(std::size(full_path)),
+            full_path, nullptr);
+        if (length == 0 || length >= std::size(full_path)) {
+            return false;
+        }
+        saved = g_win95_saved_aliases.find(win95_alias_key(full_path));
+        if (saved == g_win95_saved_aliases.end()) {
+            return false;
+        }
+    }
+
+    const char* name = saved->second.c_str();
+    if (const char* separator = std::strrchr(name, '\\');
+        separator != nullptr) {
+        name = separator + 1;
+    }
+    const std::size_t length = (std::min)(
+        std::strlen(name), static_cast<std::size_t>(119));
+    st_file[0] = static_cast<unsigned char>(length);
+    std::memcpy(st_file + 1, name, length);
+    return true;
+}
+
+int OpusFinishWin95SaveAlias(const unsigned char* st_file,
+                             const int success) {
+    const std::string path = counted_path(st_file);
+    if (path.empty()) {
+        return !g_win95_save_alias.active;
+    }
+    const std::string key = win95_alias_key(path);
+
+    if (g_win95_save_alias.active &&
+        _stricmp(path.c_str(),
+                 g_win95_save_alias.legacy_path.c_str()) == 0) {
+        bool copied = success != 0;
+        if (copied) {
+            copied = CopyFileA(
+                g_win95_save_alias.legacy_path.c_str(),
+                g_win95_save_alias.selected_path.c_str(),
+                FALSE) != 0;
+        }
+        if (!success) {
+            DeleteFileA(g_win95_save_alias.legacy_path.c_str());
+        } else if (copied) {
+            g_win95_saved_aliases[key] =
+                g_win95_save_alias.selected_path;
+        }
+        g_win95_save_alias = {};
+        return copied;
+    }
+
+    const auto saved = g_win95_saved_aliases.find(key);
+    if (saved == g_win95_saved_aliases.end()) {
+        return true;
+    }
+    if (!success) {
+        return false;
+    }
+    return CopyFileA(path.c_str(), saved->second.c_str(), FALSE) != 0;
+}
 
 struct OpusSdsCompat {
     std::uintptr_t current_segment;
@@ -2180,6 +2517,23 @@ Tmc TmcDoDlgDli(DltHeader** dialog_template, Hcab cab, Dli* initializer) {
     auto* dialog = find_dialog(handle);
     if (dialog == nullptr) {
         return static_cast<Tmc>(-1);
+    }
+
+    if (dialog->modal &&
+        (dialog->hid == kIddOpen || dialog->hid == kIddSaveAs)) {
+        const Tmc common_result = run_word95_common_file_dialog(*dialog);
+        dialog = find_dialog(handle);
+        if (dialog != nullptr && dialog->window != nullptr &&
+            IsWindow(dialog->window)) {
+            DestroyWindow(dialog->window);
+        }
+        g_dialogs.erase(handle);
+        g_current_dialog = find_dialog(previous_current) == nullptr ?
+            0 : previous_current;
+        g_focus_dialog = find_dialog(previous_focus) == nullptr ?
+            0 : previous_focus;
+        sync_current_dialog_globals();
+        return common_result;
     }
 
     Tmc result = kTmcCancel;

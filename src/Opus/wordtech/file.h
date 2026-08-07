@@ -1023,6 +1023,14 @@ struct PLB
 	int	fNoTsNonDest;  /* don't update tsMru on fns != fnDest */
 	};
 
+#ifdef OPUS_X64
+/* These readers return movable-heap handles.  The original K&R sources
+ * relied on implicit-int declarations, which truncate the handles on AMD64. */
+struct STTB **HsttbReadSttbfFromFile(int fn, FC fc, int fExternal,
+		int fStyleRules, int cbExtra);
+struct PL **HplReadPlf(int fn, FC fcFirst, int cb);
+#endif
+
 
 /* fast io block buffer */
 #ifdef OPUS_X64

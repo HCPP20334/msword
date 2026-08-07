@@ -103,6 +103,24 @@ static int vWin95ZoomPercent = 100;
 static int vWin95BaseDxsInch = 0;
 static int vWin95BaseDysInch = 0;
 
+/* The Word 1.x Color command opens a keyboard prompt.  The Win95 chrome
+   supplies a palette instead, but still applies the original character
+   property so document storage and formatting behavior remain unchanged. */
+int OpusApplyWin95TextColor(hwnd, ico)
+HWND hwnd;
+int ico;
+{
+	int ww = WwFromHwnd(hwnd);
+
+	if (ww < wwDocMin || ww >= wwMac || selCur.ww != ww ||
+			ico < icoAuto || ico >= icoMax)
+		return fFalse;
+	if (!FApplyOneProp(sprmCIco, ico))
+		return fFalse;
+	selCur.fUpdateRuler = fTrue;
+	return fTrue;
+}
+
 /* Read-only layout metrics used by the Win95 vertical ruler overlay. */
 int OpusGetWin95VerticalRulerMetrics(hwnd, pypPageTop, pypPageBottom,
 		pdypTopMargin, pdypBottomMargin, pdypInch)

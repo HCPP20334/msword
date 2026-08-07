@@ -86,6 +86,14 @@ DEBUGASSERTSZ            /* WIN - bogus macro for assert string */
 #include "saveas.hs"
 #include "saveas.sdm"
 
+#ifdef OPUS_X64
+extern int OpusWin95SaveAliasMatches();
+extern int OpusFinishWin95SaveAlias();
+#define FWin95SaveAliasMatches(st) OpusWin95SaveAliasMatches(st)
+#else
+#define FWin95SaveAliasMatches(st) fFalse
+#endif
+
 
 #ifdef PROTOTYPE
 #include "save.cpt"
@@ -548,6 +556,13 @@ LSaveAs:
 			AssertDo(FNormalizeStFile(stT, stFile, 
 					(*hcab)->iFmt == ISaveFmtDff(dffSaveDocType) ? 
 					nfoDot : nfoNormal));
+			#ifdef OPUS_X64
+			/* The restored SDM summary-properties dialog is not part of the
+			   Win95 common-dialog path.  Do not leave Save As waiting on that
+			   hidden secondary modal; properties remain available from File. */
+			fPromptSI = fFalse;
+			PdodDoc(doc)->fPromptSI = fFalse;
+			#endif
 			}
 
 		if (pcmb->fCheck)
@@ -677,6 +692,14 @@ LSaveAs:
 #endif /* DCORELOAD */
 
 LCleanup:
+	#ifdef OPUS_X64
+	if (cmd == cmdOK && pcmb->fAction &&
+			FWin95SaveAliasMatches(stFile) && PdodDoc(doc)->fn != fnNil)
+		FCloseFn(PdodDoc(doc)->fn);
+	if (!OpusFinishWin95SaveAlias(stFile,
+			cmd == cmdOK && pcmb->fAction) && cmd == cmdOK)
+		cmd = cmdError;
+	#endif
 	if (cmd == cmdCancelled)
 		fGuaranteeSave = fFalse;
 
@@ -960,6 +983,7 @@ LStayIn:
 			on the currently-on-line floppy */
 
 		if (FExistsStFile(stFile, fFalse /* fAnywhere */) &&
+				!FWin95SaveAliasMatches(stFile) &&
 				((fn = PdodDoc(pcesa->doc)->fn) == fnNil ||
 				FnFromOnlineSt(stFile) != fn))
 			{
@@ -989,6 +1013,7 @@ LStayIn:
 			}
 
 		/*  check for overwritting foreign file */
+		if (!FWin95SaveAliasMatches(stFile))
 		switch (IdOverwriteForeign (pcesa->doc, stFile, (*hcab)->iFmt))
 			{
 		case IDYES:
@@ -2889,12 +2914,21 @@ CHAR *stFile;
 int doc;
 
 {
+#ifdef OPUS_X64
+	/* The original progress-report handle can be retired by nested prompt
+	   activity while the save writer is still holding vhpprSave.  Leave the
+	   save progress field inactive on the flat port; the normal completion
+	   prompt below still reports the saved document and character count. */
+	vhpprSave = hNil;
+	return 0;
+#else
 	int nIncr = NIncrFromL(CpMacDoc(doc));
 	Assert(vhpprSave == hNil);
 	if ((vhpprSave = HpprStartProgressReport (mst, &stFile, nIncr, fFalse))
 			== hNil)
 		/* no biggie */
 		vmerr.mat = matNil;
+#endif
 }
 
 

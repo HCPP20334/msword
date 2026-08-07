@@ -587,7 +587,7 @@ PN pn;
 
 	Assert (vbptbExt.ibpMax < 32768 / 4);
 	ispnMax = ((vbptbExt.ibpMax << 2) / vbptbExt.cqbpspn);
-	Debug(ispnOldest = ispnSecondOldest = -1);
+	ispnOldest = ispnSecondOldest = -1;
 	tsOldest = tsSecondOldest = 0;
 	for (ispn = 0; ispn < ispnMax; ispn++)
 		{

@@ -29,6 +29,10 @@ typedef struct
 		} MST;
 
 #ifdef OPUS_X64
+struct PPR;
+struct PPR **HpprStartProgressReport(MST mst, unsigned *rgw, int nIncr,
+		int fAbortCheck);
+
 static __inline MST OpusMakeMst(cxt, st)
 int cxt;
 char *st;

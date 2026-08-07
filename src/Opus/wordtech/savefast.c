@@ -1369,7 +1369,7 @@ int     *pfPieceTableItem;
 					{
 					vpqsib->ipcd = IInPlc(hplcpcd, vpqsib->cpPicFetch - 1);
 					vpqsib->cpPicFetchLim =  CpPlc(hplcpcd, vpqsib->ipcd + 1);
-					if (ipcd + 1 == IMacPlc(hplcpcd))
+					if (vpqsib->ipcd + 1 == IMacPlc(hplcpcd))
 						vpqsib->cpPicFetchLim--;
 					}
 				}

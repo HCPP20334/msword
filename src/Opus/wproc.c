@@ -1753,6 +1753,8 @@ LONG      lParam;
 				return (LRESULT)PwwdWw(WwFromHwnd(hwnd))->rcePage.yeBottom;
 			case 78:
 				return (LRESULT)OpusGetWin95ZoomPercent(hwnd);
+			case 79:
+				return (LRESULT)selCur.chp.ico;
 			}
 		return (LRESULT) -1;
 #endif

@@ -601,8 +601,13 @@ rather than before the first char of line dl (same cp position!) */
 
 struct MERR
 	{
+#ifdef OPUS_X64
+	void **hrgwEmerg1;   /* native movable handle; hNil means stage 1 emergency */
+	void **hrgwEmerg2;   /* native movable handle reserved for Save */
+#else
 	int  hrgwEmerg1;   /*  if hNil, we have stage 1 heap emergency */
 	int  hrgwEmerg2;   /*	for use by Save   */
+#endif
 	int  fDocFull;	   /* maximum number of docs has been allocated */
 	int  fFnFull;	   /* maximum number of fns has been allocated */
 	int  fWwFull;	   /* maximum number of wws has been allocated */
@@ -646,7 +651,11 @@ struct MERR
 	int fPrintEmerg;    /* Set if printer DC is unavailable */
 	int fDclFull;	    /* maximum number of dcls (dde channels) allocated */
 #endif
+#ifdef OPUS_X64
+	void **hrgwEmerg3;   /* native movable handle reserved for EmergSave */
+#else
 	int  hrgwEmerg3;   /* for use by EmergSave   */
+#endif
 	int  fWarnDocTooBig;   /* set if some doc has grown beyond cpWarnTooBig */
 #ifdef MAC
 	long qqrgwEmergSave;	/* Mac - to make sure we are able to save */
