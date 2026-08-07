@@ -673,6 +673,11 @@ struct RC *prcInval;
 	int iLevel;
 	int iRet;
 	struct RC rcwDisp, rcwPage, rcwClip;
+#ifdef OPUS_X64
+	int dypPageStep, ipgdMac;
+	struct RC rcwPageBase, rcwAdjacent;
+	struct DOD *pdod;
+#endif
 
 
 /* get region from display rectangle */
@@ -682,6 +687,9 @@ struct RC *prcInval;
 
 /* set region from page rect */
 	RceToRcw(pwwd, &pwwd->rcePage, &rcwPage);
+#ifdef OPUS_X64
+	rcwPageBase = rcwPage;
+#endif
 	if (prcInval != NULL)
 		SectRc(prcInval, &rcwPage, &rcwClip);
 	else
@@ -692,6 +700,32 @@ struct RC *prcInval;
 	SetRectRgn(vhrgnGrey, rcwDisp.xwLeft, rcwDisp.ywTop, rcwDisp.xwRight, rcwDisp.ywBottom);
 
 	iRet = CombineRgn(vhrgnGrey/*dest*/, vhrgnGrey/*src1*/, vhrgnPage/*src2*/, RGN_DIFF);
+#ifdef OPUS_X64
+	/* The Win95 chrome paints cached text for the neighboring sheets.  Keep
+	   those rectangles out of the legacy gray-workspace erase so an inactive
+	   page is not flashed gray immediately before the overlay restores it. */
+	pdod = PdodDoc(PmwdWw(ww)->doc);
+	ipgdMac = pdod->hplcpgd == hNil ? 0 : IMacPlc(pdod->hplcpgd);
+	dypPageStep = DyOfRc(&rcwPageBase) + max(8, dypGrayOutsideSci / 3);
+	if (pwwd->ipgd > 0)
+		{
+		rcwAdjacent = rcwPageBase;
+		OffsetRect((LPRECT)&rcwAdjacent, 0, -dypPageStep);
+		InflateRect((LPRECT)&rcwAdjacent, vsci.dxpBorder, vsci.dypBorder);
+		SetRectRgn(vhrgnPage, rcwAdjacent.xwLeft, rcwAdjacent.ywTop,
+				rcwAdjacent.xwRight, rcwAdjacent.ywBottom);
+		CombineRgn(vhrgnGrey, vhrgnGrey, vhrgnPage, RGN_DIFF);
+		}
+	if (pwwd->ipgd + 1 < ipgdMac)
+		{
+		rcwAdjacent = rcwPageBase;
+		OffsetRect((LPRECT)&rcwAdjacent, 0, dypPageStep);
+		InflateRect((LPRECT)&rcwAdjacent, vsci.dxpBorder, vsci.dypBorder);
+		SetRectRgn(vhrgnPage, rcwAdjacent.xwLeft, rcwAdjacent.ywTop,
+				rcwAdjacent.xwRight, rcwAdjacent.ywBottom);
+		CombineRgn(vhrgnGrey, vhrgnGrey, vhrgnPage, RGN_DIFF);
+		}
+#endif
 	if (iRet != ERROR && iRet != NULLREGION)
 		FillRgn(hdc, vhrgnGrey, vsci.hbrDesktop);
 
@@ -2863,7 +2897,13 @@ TrashWw(ww)
 if there is invalid area caused by a dialog box, DrawBlankPage will only
 redraw that area so we must force the whole rect to be invalidated. */
 		if (pwwd->fPageView)
-			InvalidateRect(pwwd->hwnd, (LPRECT)&pwwd->rcwDisp, fTrue);
+			InvalidateRect(pwwd->hwnd, (LPRECT)&pwwd->rcwDisp,
+#ifdef OPUS_X64
+					fFalse
+#else
+					fTrue
+#endif
+					);
 #endif
 		}
 

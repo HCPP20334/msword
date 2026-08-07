@@ -169,6 +169,7 @@ struct VerticalRulerDragState {
     bool active = false;
     bool top = false;
     int preview_y = 0;
+    int page_offset = 0;
 };
 
 VerticalRulerDragState g_vertical_ruler_drag{};
@@ -1163,7 +1164,8 @@ void redraw_vertical_ruler(HWND pane) {
     UpdateWindow(pane);
 }
 
-bool vertical_margin_marker_at(HWND pane, POINT point, bool* top_marker) {
+bool vertical_margin_marker_at(HWND pane, POINT point, bool* top_marker,
+                               int* page_offset) {
     RECT client{};
     GetClientRect(pane, &client);
     if (point.x < client.left ||
@@ -1182,15 +1184,53 @@ bool vertical_margin_marker_at(HWND pane, POINT point, bool* top_marker) {
         return false;
     }
 
-    const int top_y = page_top + top_margin;
-    const int bottom_y = page_bottom - bottom_margin;
     const int hit_radius = scale(pane, 7);
-    const int top_distance = std::abs(point.y - top_y);
-    const int bottom_distance = std::abs(point.y - bottom_y);
-    if (top_distance > hit_radius && bottom_distance > hit_radius) {
+    int page_left = 0;
+    int continuous_top = 0;
+    int page_right = 0;
+    int continuous_bottom = 0;
+    int page_gap = 0;
+    int has_previous = 0;
+    int has_next = 0;
+    OpusGetWin95ContinuousPageMetrics(
+        pane, &page_left, &continuous_top, &page_right,
+        &continuous_bottom, &page_gap, &has_previous, &has_next);
+    const int page_step = page_bottom - page_top + page_gap;
+    const std::array<int, 3> offsets{
+        has_previous ? -page_step : 0,
+        0,
+        has_next ? page_step : 0};
+    int closest_distance = hit_radius + 1;
+    bool closest_top = false;
+    int closest_offset = 0;
+    for (std::size_t index = 0; index < offsets.size(); ++index) {
+        const int offset = offsets[index];
+        if ((index == 0 && !has_previous) ||
+            (index == 2 && !has_next)) {
+            continue;
+        }
+        const int top_distance = std::abs(
+            point.y - (page_top + offset + top_margin));
+        const int bottom_distance = std::abs(
+            point.y - (page_bottom + offset - bottom_margin));
+        if (top_distance < closest_distance) {
+            closest_distance = top_distance;
+            closest_top = true;
+            closest_offset = offset;
+        }
+        if (bottom_distance < closest_distance) {
+            closest_distance = bottom_distance;
+            closest_top = false;
+            closest_offset = offset;
+        }
+    }
+    if (closest_distance > hit_radius) {
         return false;
     }
-    *top_marker = top_distance <= bottom_distance;
+    *top_marker = closest_top;
+    if (page_offset != nullptr) {
+        *page_offset = closest_offset;
+    }
     return true;
 }
 
@@ -1211,6 +1251,8 @@ void update_vertical_margin_drag(HWND pane, int y) {
         return;
     }
 
+    page_top += g_vertical_ruler_drag.page_offset;
+    page_bottom += g_vertical_ruler_drag.page_offset;
     const int minimum_text_height = std::max(
         scale(pane, 12), std::max(1, pixels_per_inch / 4));
     if (g_vertical_ruler_drag.top) {
@@ -1275,6 +1317,20 @@ void prune_page_snapshots(HWND pane) {
         }
         g_page_snapshots.erase(oldest);
         --pane_count;
+    }
+}
+
+void clear_page_snapshots(HWND pane) {
+    for (auto iterator = g_page_snapshots.begin();
+         iterator != g_page_snapshots.end();) {
+        if (iterator->pane == pane) {
+            if (iterator->bitmap != nullptr) {
+                DeleteObject(iterator->bitmap);
+            }
+            iterator = g_page_snapshots.erase(iterator);
+        } else {
+            ++iterator;
+        }
     }
 }
 
@@ -1364,9 +1420,6 @@ void draw_neighbor_sheet(HDC dc, const RECT& sheet, const RECT& client,
         DeleteObject(shadow_brush);
     }
 
-    HBRUSH page_brush = CreateSolidBrush(RGB(255, 255, 255));
-    FillRect(dc, &visible, page_brush);
-    DeleteObject(page_brush);
     if (snapshot != nullptr && snapshot->bitmap != nullptr) {
         HDC memory = CreateCompatibleDC(dc);
         HBITMAP previous = static_cast<HBITMAP>(
@@ -1377,6 +1430,10 @@ void draw_neighbor_sheet(HDC dc, const RECT& sheet, const RECT& client,
                SRCCOPY);
         SelectObject(memory, previous);
         DeleteDC(memory);
+    } else {
+        HBRUSH page_brush = CreateSolidBrush(RGB(255, 255, 255));
+        FillRect(dc, &visible, page_brush);
+        DeleteObject(page_brush);
     }
     HBRUSH border_brush = CreateSolidBrush(RGB(96, 96, 96));
     FrameRect(dc, &sheet, border_brush);
@@ -1447,25 +1504,60 @@ void draw_vertical_ruler(HWND pane, HDC dc) {
         return;
     }
 
-    int active_top = page_top + top_margin;
-    int active_bottom = page_bottom - bottom_margin;
+    int page_left = 0;
+    int continuous_top = 0;
+    int page_right = 0;
+    int continuous_bottom = 0;
+    int page_gap = 0;
+    int has_previous = 0;
+    int has_next = 0;
+    if (!OpusGetWin95ContinuousPageMetrics(
+            pane, &page_left, &continuous_top, &page_right,
+            &continuous_bottom, &page_gap, &has_previous, &has_next)) {
+        page_gap = 0;
+        has_previous = 0;
+        has_next = 0;
+    }
+
+    int displayed_top_margin = top_margin;
+    int displayed_bottom_margin = bottom_margin;
     if (g_vertical_ruler_drag.active &&
         g_vertical_ruler_drag.pane == pane) {
         if (g_vertical_ruler_drag.top) {
-            active_top = g_vertical_ruler_drag.preview_y;
+            displayed_top_margin = g_vertical_ruler_drag.preview_y -
+                (page_top + g_vertical_ruler_drag.page_offset);
         } else {
-            active_bottom = g_vertical_ruler_drag.preview_y;
+            displayed_bottom_margin =
+                page_bottom + g_vertical_ruler_drag.page_offset -
+                g_vertical_ruler_drag.preview_y;
         }
     }
-    RECT writable{ruler.left, active_top, ruler.right, active_bottom};
-    writable.top = std::max(ruler.top, writable.top);
-    writable.bottom = std::min(ruler.bottom, writable.bottom);
-    if (writable.bottom > writable.top) {
-        HBRUSH active_brush = CreateSolidBrush(RGB(255, 255, 255));
-        FillRect(dc, &writable, active_brush);
-        DeleteObject(active_brush);
-        DrawEdge(dc, &writable, EDGE_SUNKEN, BF_TOP | BF_BOTTOM);
+
+    const int page_step = page_bottom - page_top + page_gap;
+    const std::array<int, 3> offsets{
+        has_previous ? -page_step : 0,
+        0,
+        has_next ? page_step : 0};
+    HBRUSH active_brush = CreateSolidBrush(RGB(255, 255, 255));
+    for (std::size_t index = 0; index < offsets.size(); ++index) {
+        if ((index == 0 && !has_previous) ||
+            (index == 2 && !has_next)) {
+            continue;
+        }
+        const int instance_top = page_top + offsets[index];
+        const int instance_bottom = page_bottom + offsets[index];
+        RECT writable{ruler.left,
+                      instance_top + displayed_top_margin,
+                      ruler.right,
+                      instance_bottom - displayed_bottom_margin};
+        writable.top = std::max(ruler.top, writable.top);
+        writable.bottom = std::min(ruler.bottom, writable.bottom);
+        if (writable.bottom > writable.top) {
+            FillRect(dc, &writable, active_brush);
+            DrawEdge(dc, &writable, EDGE_SUNKEN, BF_TOP | BF_BOTTOM);
+        }
     }
+    DeleteObject(active_brush);
     DrawEdge(dc, &ruler, EDGE_RAISED, BF_LEFT | BF_RIGHT);
 
     HPEN active_pen = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));
@@ -1476,31 +1568,42 @@ void draw_vertical_ruler(HWND pane, HDC dc) {
     const int previous_bk = SetBkMode(dc, TRANSPARENT);
     const COLORREF previous_text = SetTextColor(dc, RGB(0, 0, 0));
     const int eighth = std::max(1, pixels_per_inch / 8);
-    int tick_index = 0;
-    for (int y = page_top; y < page_bottom && y < ruler.bottom;
-         y += eighth, ++tick_index) {
-        if (y < ruler.top) {
+    for (std::size_t index = 0; index < offsets.size(); ++index) {
+        if ((index == 0 && !has_previous) ||
+            (index == 2 && !has_next)) {
             continue;
         }
-        const bool writable_tick = y >= active_top && y <= active_bottom;
-        SelectObject(dc, writable_tick ? active_pen : subdued_pen);
-        int length = scale(pane, 3);
-        if (tick_index % 8 == 0) {
-            length = scale(pane, 9);
-        } else if (tick_index % 4 == 0) {
-            length = scale(pane, 7);
-        } else if (tick_index % 2 == 0) {
-            length = scale(pane, 5);
-        }
-        MoveToEx(dc, ruler.right - scale(pane, 2) - length, y, nullptr);
-        LineTo(dc, ruler.right - scale(pane, 2), y);
-        if (tick_index > 0 && tick_index % 8 == 0) {
-            const std::wstring label = std::to_wstring(tick_index / 8);
-            SetTextColor(dc, writable_tick ? RGB(0, 0, 0) :
-                                             RGB(80, 80, 80));
-            TextOutW(dc, ruler.left + scale(pane, 3),
-                     y - scale(pane, 6), label.c_str(),
-                     static_cast<int>(label.size()));
+        const int instance_top = page_top + offsets[index];
+        const int instance_bottom = page_bottom + offsets[index];
+        const int active_top = instance_top + displayed_top_margin;
+        const int active_bottom = instance_bottom - displayed_bottom_margin;
+        int tick_index = 0;
+        for (int y = instance_top; y < instance_bottom && y < ruler.bottom;
+             y += eighth, ++tick_index) {
+            if (y < ruler.top) {
+                continue;
+            }
+            const bool writable_tick =
+                y >= active_top && y <= active_bottom;
+            SelectObject(dc, writable_tick ? active_pen : subdued_pen);
+            int length = scale(pane, 3);
+            if (tick_index % 8 == 0) {
+                length = scale(pane, 9);
+            } else if (tick_index % 4 == 0) {
+                length = scale(pane, 7);
+            } else if (tick_index % 2 == 0) {
+                length = scale(pane, 5);
+            }
+            MoveToEx(dc, ruler.right - scale(pane, 2) - length, y, nullptr);
+            LineTo(dc, ruler.right - scale(pane, 2), y);
+            if (tick_index > 0 && tick_index % 8 == 0) {
+                const std::wstring label = std::to_wstring(tick_index / 8);
+                SetTextColor(dc, writable_tick ? RGB(0, 0, 0) :
+                                                 RGB(80, 80, 80));
+                TextOutW(dc, ruler.left + scale(pane, 3),
+                         y - scale(pane, 6), label.c_str(),
+                         static_cast<int>(label.size()));
+            }
         }
     }
 
@@ -1521,8 +1624,16 @@ void draw_vertical_ruler(HWND pane, HDC dc) {
         SelectObject(dc, old);
         DeleteObject(marker);
     };
-    draw_margin_marker(active_top);
-    draw_margin_marker(active_bottom);
+    for (std::size_t index = 0; index < offsets.size(); ++index) {
+        if ((index == 0 && !has_previous) ||
+            (index == 2 && !has_next)) {
+            continue;
+        }
+        draw_margin_marker(page_top + offsets[index] +
+                           displayed_top_margin);
+        draw_margin_marker(page_bottom + offsets[index] -
+                           displayed_bottom_margin);
+    }
 
     SetTextColor(dc, previous_text);
     SetBkMode(dc, previous_bk);
@@ -1880,9 +1991,18 @@ LRESULT CALLBACK ruler_overlay_proc(HWND overlay, UINT message,
             if (GetCapture() == overlay) {
                 ReleaseCapture();
             }
-            if (!OpusAdjustWin95HorizontalMargin(
-                    ruler, left_boundary ? 1 : 0, delta)) {
+            const bool changed = OpusAdjustWin95HorizontalMargin(
+                ruler, left_boundary ? 1 : 0, delta) != 0;
+            if (!changed) {
                 MessageBeep(MB_ICONEXCLAMATION);
+            } else {
+                HWND pane = nullptr;
+                EnumChildWindows(GetAncestor(ruler, GA_ROOT),
+                                 find_document_pane,
+                                 reinterpret_cast<LPARAM>(&pane));
+                if (pane != nullptr) {
+                    clear_page_snapshots(pane);
+                }
             }
             if (IsWindow(overlay)) {
                 redraw_horizontal_ruler_overlay(overlay);
@@ -2024,7 +2144,9 @@ LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
     if (message == WM_LBUTTONDOWN) {
         POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
         bool top_marker = false;
-        if (vertical_margin_marker_at(pane, point, &top_marker)) {
+        int page_offset = 0;
+        if (vertical_margin_marker_at(
+                pane, point, &top_marker, &page_offset)) {
             int page_top = 0;
             int page_bottom = 0;
             int top_margin = 0;
@@ -2036,8 +2158,10 @@ LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
                 g_vertical_ruler_drag.pane = pane;
                 g_vertical_ruler_drag.active = true;
                 g_vertical_ruler_drag.top = top_marker;
+                g_vertical_ruler_drag.page_offset = page_offset;
                 g_vertical_ruler_drag.preview_y = top_marker ?
-                    page_top + top_margin : page_bottom - bottom_margin;
+                    page_top + page_offset + top_margin :
+                    page_bottom + page_offset - bottom_margin;
                 SetFocus(pane);
                 SetCapture(pane);
                 SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32645)));
@@ -2054,7 +2178,8 @@ LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
         }
         POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
         bool top_marker = false;
-        if (vertical_margin_marker_at(pane, point, &top_marker)) {
+        if (vertical_margin_marker_at(
+                pane, point, &top_marker, nullptr)) {
             SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32645)));
             return 0;
         }
@@ -2072,16 +2197,21 @@ LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
             &pixels_per_inch) != 0;
         const bool top_marker = g_vertical_ruler_drag.top;
         const int preview_y = g_vertical_ruler_drag.preview_y;
+        const int page_offset = g_vertical_ruler_drag.page_offset;
         g_vertical_ruler_drag = {};
         if (GetCapture() == pane) {
             ReleaseCapture();
         }
         if (have_metrics) {
             const int margin_pixels = top_marker ?
-                preview_y - page_top : page_bottom - preview_y;
-            if (!OpusSetWin95VerticalMargin(
-                    pane, top_marker ? 1 : 0, margin_pixels)) {
+                preview_y - (page_top + page_offset) :
+                page_bottom + page_offset - preview_y;
+            const bool changed = OpusSetWin95VerticalMargin(
+                pane, top_marker ? 1 : 0, margin_pixels) != 0;
+            if (!changed) {
                 MessageBeep(MB_ICONEXCLAMATION);
+            } else {
+                clear_page_snapshots(pane);
             }
         }
         redraw_vertical_ruler(pane);
@@ -2119,7 +2249,8 @@ LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
         bool top_marker = false;
         if ((g_vertical_ruler_drag.active &&
              g_vertical_ruler_drag.pane == pane) ||
-            vertical_margin_marker_at(pane, point, &top_marker)) {
+            vertical_margin_marker_at(
+                pane, point, &top_marker, nullptr)) {
             SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32645)));
             return TRUE;
         }
@@ -2167,17 +2298,7 @@ LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
         if (g_document_wheel.pane == pane) {
             g_document_wheel = {};
         }
-        for (auto iterator = g_page_snapshots.begin();
-             iterator != g_page_snapshots.end();) {
-            if (iterator->pane == pane) {
-                if (iterator->bitmap != nullptr) {
-                    DeleteObject(iterator->bitmap);
-                }
-                iterator = g_page_snapshots.erase(iterator);
-            } else {
-                ++iterator;
-            }
-        }
+        clear_page_snapshots(pane);
         RemovePropW(pane, kOriginalPaneProcProperty);
         if (original != nullptr) {
             SetWindowLongPtrW(pane, GWLP_WNDPROC,
