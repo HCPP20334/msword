@@ -117,6 +117,7 @@ extern IDF		vidf;
 extern struct ITR	vitr;
 #ifdef OPUS_X64
 extern int OpusCreateWin95Chrome(HWND);
+extern void OpusRequestWin95PageView(HWND);
 #endif
 
 
@@ -656,6 +657,11 @@ BOOL fTutorial;
     EndLongOp(fFalse /* fAll */);
     Scribble(15,'L');
     Scribble(14,' ');
+
+#ifdef OPUS_X64
+	/* Enter Page View after the document layout records are fully built. */
+	OpusRequestWin95PageView(vhwndApp);
+#endif
 
     Profile( vpfi == pfiInit ? StopProf() : 0 );
     Debug(CkSortOrdinals());

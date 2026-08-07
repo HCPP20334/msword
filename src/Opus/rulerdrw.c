@@ -69,6 +69,7 @@ extern BOOL    vfInitializingRuler;
 extern CHAR    szEmpty[];
 extern HCURSOR vhcArrow;
 extern struct CA    caTap;
+extern struct CA    caHdt;
 extern BOOL         vfSeeSel;
 
 extern struct REB * PrebInitPrebHrsd ();
@@ -96,6 +97,227 @@ extern int              vdbmgDevice;
 #endif /* WIN23 */
 
 extern struct REB * vpreb;
+
+#ifdef OPUS_X64
+/* Read-only layout metrics used by the Win95 vertical ruler overlay. */
+int OpusGetWin95VerticalRulerMetrics(hwnd, pypPageTop, pypPageBottom,
+		pdypTopMargin, pdypBottomMargin, pdypInch)
+HWND hwnd;
+int *pypPageTop, *pypPageBottom;
+int *pdypTopMargin, *pdypBottomMargin, *pdypInch;
+{
+	int ww = WwFromHwnd(hwnd);
+	struct WWD *pwwd;
+	struct DOD *pdod;
+
+	if (ww < wwDocMin || ww >= wwMac)
+		return fFalse;
+	pwwd = PwwdWw(ww);
+	if (!pwwd->fPageView || pwwd->ipgd == ipgdNil)
+		return fFalse;
+	pdod = PdodDoc(PmwdWw(ww)->doc);
+	*pypPageTop = pwwd->rcePage.yeTop;
+	*pypPageBottom = pwwd->rcePage.yeBottom;
+	*pdypTopMargin = DypFromDya(abs(pdod->dop.dyaTop));
+	*pdypBottomMargin = DypFromDya(abs(pdod->dop.dyaBottom));
+	*pdypInch = vfti.dypInch;
+	return fTrue;
+}
+
+/* Commit a vertical-ruler drag through the document's existing DOP state.
+   The UI passes a screen-pixel margin; preserve header/footer overlap signs
+   and invalidate page layout exactly as the Page Setup path does. */
+int OpusSetWin95VerticalMargin(hwnd, fTop, dypMargin)
+HWND hwnd;
+int fTop, dypMargin;
+{
+	int ww = WwFromHwnd(hwnd);
+	int doc, dyaMargin, dyaOther, dyaMax, dyaOld, dyaNew;
+	struct DOD *pdod;
+
+	if (ww < wwDocMin || ww >= wwMac || vfti.dypInch <= 0)
+		return fFalse;
+	doc = PmwdWw(ww)->doc;
+	dyaMargin = NMultDiv(max(0, dypMargin), czaInch, vfti.dypInch);
+
+	FreezeHp();
+	pdod = PdodDoc(doc);
+	dyaOther = abs(fTop ? pdod->dop.dyaBottom : pdod->dop.dyaTop);
+	/* Retain at least a quarter inch of writable page height. */
+	dyaMax = max(0, pdod->dop.yaPage - dyaOther - czaInch / 4);
+	dyaMargin = min(dyaMargin, dyaMax);
+	dyaOld = fTop ? pdod->dop.dyaTop : pdod->dop.dyaBottom;
+	dyaNew = dyaOld < 0 ? -dyaMargin : dyaMargin;
+	if (dyaNew == dyaOld)
+		{
+		MeltHp();
+		return fTrue;
+		}
+	if (fTop)
+		pdod->dop.dyaTop = dyaNew;
+	else
+		pdod->dop.dyaBottom = dyaNew;
+	pdod->fDirty = pdod->fFormatted = fTrue;
+	pdod->fEnvDirty = fTrue;
+	MeltHp();
+
+	caHdt.doc = docNil;
+	SetUndoNil();
+	InvalPageView(doc);
+	if (doc == DocMother(selCur.doc))
+		selCur.fUpdatePap = fTrue;
+	InvalidateRect(hwnd, NULL, TRUE);
+	UpdateWindow(hwnd);
+	return fTrue;
+}
+
+int OpusGetWin95HorizontalPageMargins(hwndMark, pdxpLeft, pdxpRight)
+HWND hwndMark;
+int *pdxpLeft, *pdxpRight;
+{
+	HWND hwndRuler = GetParent(hwndMark);
+	struct RSD **hrsd;
+	struct DOD *pdod;
+	int doc;
+
+	if (hwndRuler == NULL || selCur.doc == docNil)
+		return fFalse;
+	hrsd = HrsdFromHwndRuler(hwndRuler);
+	if (hrsd == hNil || *hrsd == NULL || (*hrsd)->hwndMark != hwndMark)
+		return fFalse;
+	doc = DocMother(selCur.doc);
+	FreezeHp();
+	pdod = PdodDoc(doc);
+	*pdxpLeft = DxsFromDxa(0, max(0, pdod->dop.dxaLeft));
+	*pdxpRight = DxsFromDxa(0, max(0, pdod->dop.dxaRight));
+	MeltHp();
+	return fTrue;
+}
+
+int OpusAdjustWin95HorizontalMargin(hwndMark, fLeft, dxpDelta)
+HWND hwndMark;
+int fLeft, dxpDelta;
+{
+	HWND hwndRuler = GetParent(hwndMark);
+	struct RSD **hrsd;
+	struct DOD *pdod;
+	int doc, dxaDelta, dxaOther, dxaMax, dxaOld, dxaNew;
+
+	if (hwndRuler == NULL || selCur.doc == docNil)
+		return fFalse;
+	hrsd = HrsdFromHwndRuler(hwndRuler);
+	if (hrsd == hNil || *hrsd == NULL || (*hrsd)->hwndMark != hwndMark)
+		return fFalse;
+	doc = DocMother(selCur.doc);
+	dxaDelta = DxaFromDxs(0, dxpDelta);
+
+	FreezeHp();
+	pdod = PdodDoc(doc);
+	dxaOld = fLeft ? pdod->dop.dxaLeft : pdod->dop.dxaRight;
+	dxaOther = fLeft ? pdod->dop.dxaRight : pdod->dop.dxaLeft;
+	dxaNew = fLeft ? dxaOld + dxaDelta : dxaOld - dxaDelta;
+	dxaMax = max(0, pdod->dop.xaPage - max(0, dxaOther) -
+			max(0, pdod->dop.dxaGutter) - czaInch / 4);
+	dxaNew = max(0, min(dxaNew, dxaMax));
+	if (dxaNew == dxaOld)
+		{
+		MeltHp();
+		return fTrue;
+		}
+	if (fLeft)
+		pdod->dop.dxaLeft = dxaNew;
+	else
+		pdod->dop.dxaRight = dxaNew;
+	pdod->fDirty = pdod->fFormatted = fTrue;
+	pdod->fEnvDirty = fTrue;
+	pdod->fLRDirty = fTrue;
+	MeltHp();
+
+	caHdt.doc = docNil;
+	SetUndoNil();
+	InvalPageView(doc);
+	InvalDoc(doc);
+	InvalTableProps(doc, cp0, CpMacDoc(doc), fTrue);
+	InvalFli();
+	if (doc == DocMother(selCur.doc))
+		selCur.fUpdatePap = fTrue;
+	InvalidateRect(hwndMark, NULL, TRUE);
+	UpdateWindow(hwndMark);
+	return fTrue;
+}
+
+/* Snapshot the native ruler geometry for the Win95 paint-only overlay. */
+int OpusGetWin95HorizontalRulerMetrics(hwndMark, pxpZero, pxpActiveLeft,
+		pxpActiveRight, pdxpInch, pxpLeftIndent, pxpFirstIndent,
+		pxpRightIndent, pdxpDefaultTab, pcTabs, rgxpTabs, rgbTabTypes,
+		cTabsMax)
+HWND hwndMark;
+int *pxpZero, *pxpActiveLeft, *pxpActiveRight, *pdxpInch;
+int *pxpLeftIndent, *pxpFirstIndent, *pxpRightIndent, *pdxpDefaultTab;
+int *pcTabs, *rgxpTabs;
+unsigned char *rgbTabTypes;
+int cTabsMax;
+{
+	HWND hwndRuler = GetParent(hwndMark);
+	struct RSD **hrsd;
+	struct RSD *prsd;
+	int itbd, itbdMac;
+	int xpOrigin;
+
+	if (hwndRuler == NULL)
+		return fFalse;
+	hrsd = HrsdFromHwndRuler(hwndRuler);
+	if (hrsd == hNil || *hrsd == NULL || (*hrsd)->hwndMark != hwndMark)
+		return fFalse;
+	prsd = *hrsd;
+	xpOrigin = XpMarkFromXaMark(0, hrsd);
+	*pxpZero = xpOrigin;
+	*pdxpInch = XpMarkFromXaMark(czaInch, hrsd) - xpOrigin;
+	*pcTabs = 0;
+
+	if (prsd->rk == rkNormal)
+		{
+		*pxpActiveLeft = xpOrigin;
+		*pxpActiveRight = XpMarkFromXaMark(prsd->dxaColumnNorm, hrsd);
+		*pxpLeftIndent = XpMarkFromXaMark(prsd->pap.dxaLeft, hrsd);
+		*pxpFirstIndent = XpMarkFromXaMark(
+				prsd->pap.dxaLeft + prsd->pap.dxaLeft1, hrsd);
+		*pxpRightIndent = XpMarkFromXaMark(
+				prsd->dxaColumnNorm - prsd->pap.dxaRight, hrsd);
+		*pdxpDefaultTab = XpMarkFromXaMark(prsd->dxaTab, hrsd) - xpOrigin;
+		itbdMac = min(prsd->pap.itbdMac, cTabsMax);
+		for (itbd = 0; itbd < itbdMac; ++itbd)
+			{
+			rgxpTabs[itbd] = XpMarkFromXaMark(
+					prsd->pap.rgdxaTab[itbd], hrsd);
+			rgbTabTypes[itbd] =
+					((unsigned char)prsd->pap.rgtbd[itbd]) & 7;
+			}
+		*pcTabs = itbdMac;
+		}
+	else if (prsd->rk == rkPage)
+		{
+		*pxpActiveLeft = XpMarkFromXaMark(
+				prsd->dxaLeftMar + prsd->dxaExtraLeft, hrsd);
+		*pxpActiveRight = XpMarkFromXaMark(
+				prsd->xaPage - prsd->dxaRightMar -
+				prsd->dxaExtraRight, hrsd);
+		*pxpLeftIndent = *pxpFirstIndent = *pxpActiveLeft;
+		*pxpRightIndent = *pxpActiveRight;
+		*pdxpDefaultTab = max(1, *pdxpInch / 2);
+		}
+	else
+		{
+		*pxpActiveLeft = xpOrigin;
+		*pxpActiveRight = prsd->xpRight;
+		*pxpLeftIndent = *pxpFirstIndent = *pxpActiveLeft;
+		*pxpRightIndent = *pxpActiveRight;
+		*pdxpDefaultTab = max(1, *pdxpInch / 2);
+		}
+
+	return *pdxpInch > 0 && *pxpActiveRight > *pxpActiveLeft;
+}
+#endif
 
 
 /* scale display infromation */
@@ -939,6 +1161,66 @@ ScrollRuler ()
 
 /* RULER PAINTING FUNCTIONS */
 
+#ifdef OPUS_X64
+static void DrawWord95RulerBand(hdc, preb, ypTop, ypBottom)
+HDC hdc;
+struct REB *preb;
+int ypTop, ypBottom;
+{
+	RECT rcClient, rcBand, rcWrite;
+	struct RSD **hrsd = preb->hrsd;
+	int xpLeft, xpRight;
+
+	GetClientRect((*hrsd)->hwndMark, &rcClient);
+	rcBand.left = max(rcClient.left, preb->xpLeft);
+	rcBand.right = min(rcClient.right, preb->xpRight);
+	rcBand.top = max(rcClient.top, ypTop);
+	rcBand.bottom = min(rcClient.bottom, ypBottom);
+	if (rcBand.right <= rcBand.left || rcBand.bottom <= rcBand.top)
+		return;
+
+	FillRect(hdc, &rcBand, GetSysColorBrush(COLOR_BTNFACE));
+	xpLeft = (*hrsd)->xpZero;
+	xpRight = XpMarkFromXaMark((*hrsd)->dxaColumnNorm, hrsd);
+	if (xpRight < xpLeft)
+		{
+		int xp = xpLeft;
+		xpLeft = xpRight;
+		xpRight = xp;
+		}
+	if (xpLeft < rcClient.left || xpLeft >= rcClient.right)
+		xpLeft = rcClient.left + 2;
+	if (xpRight <= xpLeft || xpRight > rcClient.right)
+		xpRight = rcClient.right - 2;
+	rcWrite = rcBand;
+	rcWrite.left = max(rcBand.left, xpLeft);
+	rcWrite.right = min(rcBand.right, xpRight);
+	if (rcWrite.right > rcWrite.left)
+		FillRect(hdc, &rcWrite, GetSysColorBrush(COLOR_WINDOW));
+}
+
+static void FrameWord95Ruler(hdc, preb)
+HDC hdc;
+struct REB *preb;
+{
+	RECT rcClient, rcWrite;
+	struct RSD **hrsd = preb->hrsd;
+
+	GetClientRect((*hrsd)->hwndMark, &rcClient);
+	rcWrite = rcClient;
+	rcWrite.left = max(rcClient.left, (*hrsd)->xpZero);
+	rcWrite.right = min(rcClient.right,
+			XpMarkFromXaMark((*hrsd)->dxaColumnNorm, hrsd));
+	if (rcWrite.left < rcClient.left || rcWrite.left >= rcClient.right)
+		rcWrite.left = rcClient.left + 2;
+	if (rcWrite.right <= rcWrite.left || rcWrite.right > rcClient.right)
+		rcWrite.right = rcClient.right - 2;
+	DrawEdge(hdc, &rcClient, EDGE_RAISED, BF_RECT);
+	if (rcWrite.right > rcWrite.left)
+		DrawEdge(hdc, &rcWrite, EDGE_SUNKEN, BF_RECT);
+}
+#endif
+
 
 /*  PaintRuler
 */
@@ -988,6 +1270,13 @@ int rpc;
 		ErrorNoMemory(eidNoMemDisplay);
 		goto LRetCleanup;
 		}
+#ifdef OPUS_X64
+	if (rpc & rpcmScale)
+		DrawWord95RulerBand(hdc, preb, 0, ypScaleBottom);
+	if (rpc & rpcmMark)
+		DrawWord95RulerBand(hdc, preb, ypMark, ypMarkBottom);
+	fErased = fTrue;
+#endif
 #ifdef WIN23
 	if (vsci.fWin3Visuals)
 		hbrOld = SelectObject(hdc, vdbmgDevice != dbmgEGA3 ? vhbrLtGray : vhbrGray);
@@ -1024,6 +1313,9 @@ int rpc;
 					dypMark);
 		}
 
+#ifdef OPUS_X64
+	FrameWord95Ruler(hdc, preb);
+#endif
 
 LRetCleanup:
 	/* clean up */
@@ -2232,6 +2524,7 @@ BOOL fErased;
 #else
 	DrawRulerTicks(hdc, hrsd, dxa, 0, ut, preb->xpRight, fTrue);
 #endif /* REVIEW */
+#ifndef OPUS_X64
 	/*****
 		3D effect for ticks. I repeated the loop to avoid switching
 		brushes constantly. 
@@ -2272,6 +2565,7 @@ BOOL fErased;
 #else
 	DrawRulerTicks(hdc, hrsd, dxa, -1, ut, preb->xpRight, fFalse);
 #endif /* REVIEW */
+#endif /* !OPUS_X64 */
 	SelectObject(hdc, vhbrBlack);
 
 	if (hfontStatLine && hfontOld)
@@ -2326,6 +2620,107 @@ struct REB * preb;
 int xp, imk, ms;
 int fErase;	/* are we removing the mark? For color we have different ROPs */
 {
+#ifdef OPUS_X64
+	int ypTop = ypMark + 1;
+	int ypBottom = ypMarkBottom - 2;
+	int ypMiddle = (ypTop + ypBottom) / 2;
+	int ropOld;
+	COLORREF color = ms == msGray ? GetSysColor(COLOR_GRAYTEXT) : RGB(0, 0, 0);
+	HPEN hpen, hpenOld;
+	HBRUSH hbr, hbrOld;
+	POINT rgpt[3];
+	RECT rc;
+
+	if (xp + 8 < preb->xpLeft || xp - 8 > preb->xpRight)
+		return;
+	if (fErase)
+		{
+		int xpWriteLeft = XpMarkFromXaMark(0, preb->hrsd);
+		int xpWriteRight = XpMarkFromXaMark((*preb->hrsd)->dxaColumnNorm,
+				preb->hrsd);
+		rc.left = xp - 8;
+		rc.right = xp + 9;
+		rc.top = ypMark;
+		rc.bottom = ypMarkBottom;
+		FillRect(hdc, &rc, GetSysColorBrush(
+				xp >= xpWriteLeft && xp <= xpWriteRight ?
+				COLOR_WINDOW : COLOR_BTNFACE));
+		return;
+		}
+
+	hpen = CreatePen(PS_SOLID, 1, color);
+	hbr = CreateSolidBrush(ms == msInvert ? RGB(255, 255, 255) :
+			(ms == msGray ? GetSysColor(COLOR_BTNFACE) : RGB(255, 255, 255)));
+	hpenOld = SelectObject(hdc, hpen);
+	hbrOld = SelectObject(hdc, hbr);
+	ropOld = SetROP2(hdc, ms == msInvert ? R2_NOTXORPEN : R2_COPYPEN);
+
+	switch (imk)
+		{
+		case imkTabLeft:
+			MoveToEx(hdc, xp, ypTop, NULL);
+			LineTo(hdc, xp, ypBottom - 2);
+			LineTo(hdc, xp + 5, ypBottom - 2);
+			break;
+		case imkTabCenter:
+			MoveToEx(hdc, xp, ypTop, NULL);
+			LineTo(hdc, xp, ypBottom - 2);
+			MoveToEx(hdc, xp - 4, ypBottom - 2, NULL);
+			LineTo(hdc, xp + 5, ypBottom - 2);
+			break;
+		case imkTabRight:
+			MoveToEx(hdc, xp, ypTop, NULL);
+			LineTo(hdc, xp, ypBottom - 2);
+			LineTo(hdc, xp - 5, ypBottom - 2);
+			break;
+		case imkTabDecimal:
+			MoveToEx(hdc, xp, ypTop, NULL);
+			LineTo(hdc, xp, ypBottom - 2);
+			MoveToEx(hdc, xp - 3, ypBottom - 2, NULL);
+			LineTo(hdc, xp + 2, ypBottom - 2);
+			SetPixel(hdc, xp + 4, ypBottom - 3, color);
+			break;
+		case imkIndLeft1:
+			rgpt[0].x = xp - 6; rgpt[0].y = ypTop;
+			rgpt[1].x = xp + 6; rgpt[1].y = ypTop;
+			rgpt[2].x = xp;     rgpt[2].y = min(ypBottom, ypTop + 7);
+			Polygon(hdc, rgpt, 3);
+			break;
+		case imkIndLeft:
+		case imkIndRight:
+			rgpt[0].x = xp - 6; rgpt[0].y = ypBottom - 3;
+			rgpt[1].x = xp + 6; rgpt[1].y = ypBottom - 3;
+			rgpt[2].x = xp;     rgpt[2].y = max(ypTop, ypBottom - 10);
+			Polygon(hdc, rgpt, 3);
+			if (imk == imkIndLeft)
+				Rectangle(hdc, xp - 4, ypBottom - 3, xp + 5, ypBottom + 1);
+			break;
+		case imkDefTab:
+			Rectangle(hdc, xp - 1, ypMiddle, xp + 2, ypMiddle + 3);
+			break;
+		case imkTLeft:
+		case imkTableCol:
+			Rectangle(hdc, xp - 3, ypTop + 1, xp + 4, ypBottom);
+			MoveToEx(hdc, xp, ypTop + 1, NULL);
+			LineTo(hdc, xp, ypBottom);
+			break;
+		case imkLeftMargin:
+		case imkRightMargin:
+			rgpt[0].x = xp; rgpt[0].y = ypMiddle;
+			rgpt[1].x = xp + (imk == imkLeftMargin ? 6 : -6);
+			rgpt[1].y = ypTop;
+			rgpt[2].x = rgpt[1].x; rgpt[2].y = ypBottom;
+			Polygon(hdc, rgpt, 3);
+			break;
+		}
+
+	SetROP2(hdc, ropOld);
+	SelectObject(hdc, hpenOld);
+	SelectObject(hdc, hbrOld);
+	DeleteObject(hpen);
+	DeleteObject(hbr);
+	return;
+#else
 	struct BMI *pbmi = &mpidrbbmi [idrbRulerMarks3];
 	int dxp = pbmi->dxpEach;
 	int ddxp = dxp / 2;
@@ -2355,6 +2750,7 @@ int fErase;	/* are we removing the mark? For color we have different ROPs */
 		BitBlt (hdc, (xp - ddxp), ypMark, dxp, pbmi->dyp, pmdcd->hdc,
 				xpSrc, 0, rop);
 		}
+#endif /* OPUS_X64 */
 }
 
 #endif /* WIN23 */

@@ -31,6 +31,7 @@ LRESULT CALLBACK PromptWndProc(HWND, UINT, WPARAM, LPARAM);
 extern HCURSOR vhcIBeam;
 extern HCURSOR vhcArrow;
 int OurSetCursor(HCURSOR cursor);
+void OpusDrawWin95HorizontalRuler(HWND ruler);
 
 }  // extern "C"
 
@@ -183,8 +184,13 @@ LRESULT CALLBACK NatIconBarWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     MouseCursor::arrow);
 }
 LRESULT CALLBACK NatRulerMarkWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
-    return Dispatch(h, m, w, l, RulerMarkWndProc, kRulerMarkMessages,
-                    MouseCursor::arrow);
+    const LRESULT result = Dispatch(h, m, w, l, RulerMarkWndProc,
+                                    kRulerMarkMessages,
+                                    MouseCursor::arrow);
+    if (m == WM_PAINT) {
+        OpusDrawWin95HorizontalRuler(h);
+    }
+    return result;
 }
 LRESULT CALLBACK NatPromptWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return Dispatch(h, m, w, l, PromptWndProc, kPromptMessages,

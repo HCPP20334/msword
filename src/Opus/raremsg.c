@@ -1127,7 +1127,11 @@ but outline and header iconbar should be dypIconBar */
 #ifdef OPUS_X64
 LWin95Toolbar:
 	if (OpusWin95ChromeActive())
-		prc->ypTop += OpusWin95ToolbarHeight() - vsci.dypBorder;
+		{
+		int dypWin95Toolbar = OpusWin95ToolbarHeight();
+		if (dypWin95Toolbar > 0)
+			prc->ypTop += dypWin95Toolbar - vsci.dypBorder;
+		}
 #endif
 }
 

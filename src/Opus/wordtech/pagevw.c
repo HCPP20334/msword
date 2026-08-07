@@ -178,6 +178,17 @@ CMB *pcmb; /* NOTE: for Win, this might be a flag (0 or 1) */
 
 	if ((*hwwdCur)->wk == wkPage)
 		{
+		#ifdef OPUS_X64
+		/*
+		 * The Win95 shell treats Page View as a stable view selection.  The
+		 * legacy command is a toggle, so duplicate startup/menu messages would
+		 * otherwise enter CmdPageViewOff.  That old galley reconstruction path
+		 * is not used by the restored shell and is unsafe for the native DR
+		 * layout.  Make repeated Page View selections idempotent here, at the
+		 * command source, instead of relying on a window-message filter.
+		 */
+		goto LRet;
+		#endif
 		/* goto galley view */
 		if ((BOOL) pcmb != fTrue && CmdPageViewOff(wwCur) != cmdOK)
 			goto LRet2;
@@ -819,7 +830,10 @@ struct LBS *plbsText;
 	MeltHp();
 
 	FreeDrs(hpldr, 0);
-	SetWords(&dr, 0, sizeof(struct DR) / sizeof(short));
+	/* SetWords counts native int-sized words in the x64 port.  Dividing by
+	   sizeof(short) wrote twice past dr and tripped the stack cookie as Page
+	   View was entered. */
+	SetWords(&dr, 0, cwDR);
 	SetWords(&lbs, 0, cwLBS);
 	for (idrMac = ilr = 0; ilr < ilrMac; ++ilr)
 		{

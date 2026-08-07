@@ -2569,6 +2569,15 @@ FReadUserState()
 	if (!FReadOpusIni() && !FInitDefaultPrefs(fFalse))
 		return fFalse;
 
+#ifdef OPUS_X64
+	/*
+	 * Page View has to be activated after FCreateMw finishes constructing its
+	 * layout records.  The Win95 shell requests it from its post-startup timer;
+	 * prevent a saved preference from entering it too early here.
+	 */
+	vpref.fPageView = fFalse;
+#endif
+
 	/*  this is not a *user* view preference, used internally only! */
 	vpref.grpfvisi.fForceField = fFalse;
 

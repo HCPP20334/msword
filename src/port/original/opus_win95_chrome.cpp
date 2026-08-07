@@ -11,9 +11,26 @@
 #define USEBCM
 #include "opuscmd.h"
 
+extern "C" int OpusGetWin95VerticalRulerMetrics(
+    HWND pane, int* page_top, int* page_bottom, int* top_margin,
+    int* bottom_margin, int* pixels_per_inch);
+extern "C" int OpusSetWin95VerticalMargin(
+    HWND pane, int top_margin, int margin_pixels);
+extern "C" int OpusGetWin95HorizontalRulerMetrics(
+    HWND ruler, int* zero, int* active_left, int* active_right,
+    int* pixels_per_inch, int* left_indent, int* first_indent,
+    int* right_indent, int* default_tab, int* tab_count,
+    int* tab_positions, unsigned char* tab_types, int tab_capacity);
+extern "C" int OpusGetWin95HorizontalPageMargins(
+    HWND ruler, int* left_margin, int* right_margin);
+extern "C" int OpusAdjustWin95HorizontalMargin(
+    HWND ruler, int left_margin, int delta_pixels);
+extern "C" void OpusDrawWin95HorizontalRuler(HWND ruler);
+
 namespace {
 
 constexpr wchar_t kToolbarClass[] = L"OpusWin95Toolbar";
+constexpr wchar_t kRulerOverlayClass[] = L"OpusWin95RulerOverlay";
 constexpr int kToolbarBitmap = 201;
 constexpr int kSpriteCell = 20;
 constexpr COLORREF kButtonFace = RGB(192, 192, 192);
@@ -24,7 +41,11 @@ constexpr COLORREF kCaptionBlue = RGB(0, 0, 128);
 constexpr UINT kComboStyle = 0x7501;
 constexpr UINT kComboFont = 0x7502;
 constexpr UINT kComboSize = 0x7503;
+constexpr UINT kComboZoom = 0x7504;
+constexpr UINT kCmdToggleStandardToolbar = 0x7101;
+constexpr UINT kCmdToggleFormattingToolbar = 0x7102;
 constexpr UINT_PTR kSyncTimer = 0x951;
+constexpr wchar_t kOriginalPaneProcProperty[] = L"OpusWord95OriginalPaneProc";
 
 enum class FormatGlyph {
     bold,
@@ -36,9 +57,11 @@ enum class FormatGlyph {
     align_right,
     align_justify,
     numbered,
+    bullets,
     indent_left,
     indent_right,
-    table
+    table,
+    borders
 };
 
 struct SpriteButton {
@@ -55,7 +78,7 @@ struct FormatButton {
     bool latch;
 };
 
-constexpr std::array<SpriteButton, 17> kStandardButtons{{
+constexpr std::array<SpriteButton, 18> kStandardButtons{{
     {0, bcmFileNew, 0, false},
     {1, imiOpen, 0, false},
     {2, bcmSave, 0, false},
@@ -69,13 +92,14 @@ constexpr std::array<SpriteButton, 17> kStandardButtons{{
     {10, bcmUndo, 3, false},
     {11, bcmRepeat, 3, false},
     {12, bcmInsTable, 4, false},
-    {13, imiRenumParas, 4, false},
+    {13, bcmSection, 4, false},
+    {15, bcmInsPic, 4, false},
     {14, bcmShowAll, 4, true},
     {15, bcmHelp, 5, false},
     {16, bcmHelp, 5, false},
 }};
 
-constexpr std::array<FormatButton, 12> kFormatButtons{{
+constexpr std::array<FormatButton, 14> kFormatButtons{{
     {FormatGlyph::bold, bcmBold, 0, true},
     {FormatGlyph::italic, bcmItalic, 0, true},
     {FormatGlyph::underline, bcmULine, 0, true},
@@ -85,9 +109,11 @@ constexpr std::array<FormatButton, 12> kFormatButtons{{
     {FormatGlyph::align_right, bcmParaRight, 1, true},
     {FormatGlyph::align_justify, bcmParaBoth, 1, true},
     {FormatGlyph::numbered, imiRenumParas, 2, false},
+    {FormatGlyph::bullets, imiRenumParas, 2, false},
     {FormatGlyph::indent_left, bcmUnIndent, 2, false},
     {FormatGlyph::indent_right, bcmIndent, 2, false},
     {FormatGlyph::table, bcmInsTable, 3, false},
+    {FormatGlyph::borders, bcmParagraph, 3, false},
 }};
 
 struct HitResult {
@@ -103,6 +129,7 @@ struct ToolbarState {
     HWND style_combo = nullptr;
     HWND font_combo = nullptr;
     HWND size_combo = nullptr;
+    HWND zoom_combo = nullptr;
     HWND source_style = nullptr;
     HWND source_font = nullptr;
     HWND source_size = nullptr;
@@ -110,9 +137,14 @@ struct ToolbarState {
     int copied_font_count = -1;
     int copied_size_count = -1;
     ULONGLONG suppress_sync_until = 0;
+    ULONGLONG page_view_start_after = 0;
     bool style_edit_dirty = false;
     bool font_edit_dirty = false;
     bool size_edit_dirty = false;
+    bool standard_visible = true;
+    bool formatting_visible = true;
+    bool startup_page_view_requested = false;
+    int ruler_refreshes_remaining = 0;
     HitResult pressed{};
     std::array<bool, kStandardButtons.size()> standard_latched{};
     std::array<bool, kFormatButtons.size()> format_latched{};
@@ -120,6 +152,29 @@ struct ToolbarState {
 
 HBRUSH g_menu_brush = nullptr;
 HMENU g_table_menu = nullptr;
+HMENU g_toolbars_menu = nullptr;
+WNDPROC g_original_app_proc = nullptr;
+bool g_word95_page_view_active = false;
+
+struct VerticalRulerDragState {
+    HWND pane = nullptr;
+    bool active = false;
+    bool top = false;
+    int preview_y = 0;
+};
+
+VerticalRulerDragState g_vertical_ruler_drag{};
+
+struct HorizontalRulerDragState {
+    HWND overlay = nullptr;
+    HWND ruler = nullptr;
+    bool active = false;
+    bool left = false;
+    int origin_x = 0;
+    int preview_x = 0;
+};
+
+HorizontalRulerDragState g_horizontal_ruler_drag{};
 
 int dpi_for_window(HWND window) {
     using GetDpiForWindowProc = UINT(WINAPI*)(HWND);
@@ -188,6 +243,25 @@ void configure_word95_menus(HWND window) {
         }
         return -1;
     };
+    auto find_named_in = [](HMENU menu, const wchar_t* expected) {
+        const int count = menu != nullptr ? GetMenuItemCount(menu) : 0;
+        for (int index = 0; index < count; ++index) {
+            wchar_t label[80]{};
+            GetMenuStringW(menu, index, label,
+                           static_cast<int>(sizeof(label) / sizeof(label[0])),
+                           MF_BYPOSITION);
+            std::wstring name;
+            for (const wchar_t character : std::wstring(label)) {
+                if (character != L'&') {
+                    name.push_back(character);
+                }
+            }
+            if (lstrcmpiW(name.c_str(), expected) == 0) {
+                return index;
+            }
+        }
+        return -1;
+    };
 
     // Word's menu loader can finish replacing the startup menu after this
     // layer is created, so normalize by label every time we resync.
@@ -219,11 +293,24 @@ void configure_word95_menus(HWND window) {
         if (g_table_menu != nullptr) {
             AppendMenuW(g_table_menu, MF_STRING, bcmInsTable,
                         L"&Insert Table...");
+            AppendMenuW(g_table_menu, MF_STRING, imiEditTable,
+                        L"&Rows and Columns...");
+            AppendMenuW(g_table_menu, MF_STRING, bcmFormatTable,
+                        L"Table &Properties...");
+            AppendMenuW(g_table_menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(g_table_menu, MF_STRING, bcmSelectTable,
+                        L"&Select Table");
+            AppendMenuW(g_table_menu, MF_STRING, bcmNextCell,
+                        L"Move to &Next Cell");
+            AppendMenuW(g_table_menu, MF_STRING, bcmPrevCell,
+                        L"Move to Pre&vious Cell");
+            AppendMenuW(g_table_menu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(g_table_menu, MF_STRING, bcmTableToText,
                         L"Convert Table to Te&xt...");
-            AppendMenuW(g_table_menu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(g_table_menu, MF_STRING, imiFormatTable,
-                        L"&Format Table...");
+            AppendMenuW(g_table_menu, MF_STRING, imiSort,
+                        L"&Sort...");
+            AppendMenuW(g_table_menu, MF_STRING, imiCalculate,
+                        L"&Formula/Calculate");
         }
     }
     for (int index = GetMenuItemCount(root) - 1; index >= 0; --index) {
@@ -236,6 +323,72 @@ void configure_word95_menus(HWND window) {
         InsertMenuW(root, window_index,
                     MF_BYPOSITION | MF_POPUP | MF_STRING,
                     reinterpret_cast<UINT_PTR>(g_table_menu), L"Ta&ble");
+    }
+
+    if (g_toolbars_menu == nullptr || !IsMenu(g_toolbars_menu)) {
+        g_toolbars_menu = CreatePopupMenu();
+        if (g_toolbars_menu != nullptr) {
+            AppendMenuW(g_toolbars_menu, MF_STRING,
+                        kCmdToggleStandardToolbar, L"&Standard");
+            AppendMenuW(g_toolbars_menu, MF_STRING,
+                        kCmdToggleFormattingToolbar, L"&Formatting");
+            AppendMenuW(g_toolbars_menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(g_toolbars_menu, MF_STRING, bcmRuler, L"&Ruler");
+            AppendMenuW(g_toolbars_menu, MF_STRING, bcmStatusArea,
+                        L"&Status Bar");
+            AppendMenuW(g_toolbars_menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(g_toolbars_menu, MF_STRING, bcmCustomize,
+                        L"&Customize...");
+        }
+    }
+
+    const int view_index = find_named(L"View");
+    HMENU view_menu = view_index >= 0 ? GetSubMenu(root, view_index) : nullptr;
+    if (view_menu != nullptr && g_toolbars_menu != nullptr) {
+        for (int index = GetMenuItemCount(view_menu) - 1; index >= 0;
+             --index) {
+            if (GetSubMenu(view_menu, index) == g_toolbars_menu ||
+                find_named_in(view_menu, L"Toolbars") == index) {
+                RemoveMenu(view_menu, index, MF_BYPOSITION);
+            }
+        }
+        AppendMenuW(view_menu, MF_POPUP | MF_STRING,
+                    reinterpret_cast<UINT_PTR>(g_toolbars_menu),
+                    L"&Toolbars");
+
+        if (GetMenuState(view_menu, bcmRibbon, MF_BYCOMMAND) !=
+            static_cast<UINT>(-1)) {
+            ModifyMenuW(view_menu, bcmRibbon,
+                        MF_BYCOMMAND | MF_STRING,
+                        kCmdToggleFormattingToolbar,
+                        L"&Formatting Toolbar");
+        }
+    }
+
+    const int normalized_window_index = find_named(L"Window");
+    HMENU window_menu = normalized_window_index >= 0 ?
+        GetSubMenu(root, normalized_window_index) : nullptr;
+    if (window_menu != nullptr) {
+        if (GetMenuState(window_menu, imiNewWnd, MF_BYCOMMAND) ==
+            static_cast<UINT>(-1)) {
+            AppendMenuW(window_menu, MF_STRING, imiNewWnd,
+                        L"&New Window");
+        }
+        if (GetMenuState(window_menu, bcmArrangeWnd, MF_BYCOMMAND) ==
+            static_cast<UINT>(-1)) {
+            AppendMenuW(window_menu, MF_STRING, bcmArrangeWnd,
+                        L"&Arrange All");
+        }
+        if (GetMenuState(window_menu, bcmZoomWnd, MF_BYCOMMAND) ==
+            static_cast<UINT>(-1)) {
+            AppendMenuW(window_menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(window_menu, MF_STRING, bcmZoomWnd,
+                        L"Ma&ximize Document");
+            AppendMenuW(window_menu, MF_STRING, bcmRestoreWnd,
+                        L"&Restore Document");
+            AppendMenuW(window_menu, MF_STRING, bcmCloseWnd,
+                        L"&Close Document");
+        }
     }
 }
 
@@ -266,6 +419,30 @@ void apply_caption_colors(HWND window) {
     FreeLibrary(module);
 }
 
+ToolbarState* toolbar_state(HWND toolbar) {
+    return toolbar != nullptr ? reinterpret_cast<ToolbarState*>(
+        GetWindowLongPtrW(toolbar, GWLP_USERDATA)) : nullptr;
+}
+
+int toolbar_height(HWND toolbar) {
+    const ToolbarState* state = toolbar_state(toolbar);
+    if (state == nullptr ||
+        (state->standard_visible && state->formatting_visible)) {
+        return scale(toolbar, 64);
+    }
+    if (state->standard_visible) {
+        return scale(toolbar, 33);
+    }
+    if (state->formatting_visible) {
+        return scale(toolbar, 31);
+    }
+    return 0;
+}
+
+int formatting_row_top(HWND toolbar, const ToolbarState& state) {
+    return scale(toolbar, state.standard_visible ? 34 : 1);
+}
+
 RECT standard_button_rect(HWND toolbar, int target) {
     const int button = scale(toolbar, 27);
     const int gap = scale(toolbar, 2);
@@ -290,7 +467,7 @@ int format_buttons_start(HWND toolbar) {
     return scale(toolbar, 4 + 118 + 4 + 146 + 4 + 52 + 8);
 }
 
-RECT format_button_rect(HWND toolbar, int target) {
+RECT format_button_rect(HWND toolbar, const ToolbarState& state, int target) {
     const int button = scale(toolbar, 27);
     const int gap = scale(toolbar, 2);
     const int group_gap = scale(toolbar, 7);
@@ -301,13 +478,19 @@ RECT format_button_rect(HWND toolbar, int target) {
             x += group_gap;
         }
         if (index == target) {
-            return RECT{x, scale(toolbar, 34), x + button,
-                        scale(toolbar, 34) + button};
+            const int top = formatting_row_top(toolbar, state);
+            return RECT{x, top, x + button, top + button};
         }
         x += button + gap;
         previous_group = kFormatButtons[index].group;
     }
     return RECT{};
+}
+
+int standard_buttons_end(HWND toolbar) {
+    const RECT last = standard_button_rect(
+        toolbar, static_cast<int>(kStandardButtons.size()) - 1);
+    return last.right + scale(toolbar, 8);
 }
 
 void draw_classic_edge(HDC dc, RECT rect, bool sunken) {
@@ -426,10 +609,19 @@ void draw_format_glyph(HWND toolbar, HDC dc, const FormatButton& spec,
         draw_alignment(dc, area, spec.glyph);
         return;
     }
-    if (spec.glyph == FormatGlyph::numbered) {
+    if (spec.glyph == FormatGlyph::numbered ||
+        spec.glyph == FormatGlyph::bullets) {
         for (int row = 0; row < 3; ++row) {
-            wchar_t number[2]{static_cast<wchar_t>(L'1' + row), L'\0'};
-            TextOutW(dc, area.left, area.top + row * 5 - 1, number, 1);
+            if (spec.glyph == FormatGlyph::numbered) {
+                wchar_t number[2]{static_cast<wchar_t>(L'1' + row), L'\0'};
+                TextOutW(dc, area.left, area.top + row * 5 - 1, number, 1);
+            } else {
+                HBRUSH old_brush = static_cast<HBRUSH>(SelectObject(
+                    dc, GetStockObject(BLACK_BRUSH)));
+                Ellipse(dc, area.left + 1, area.top + row * 5 + 1,
+                        area.left + 4, area.top + row * 5 + 4);
+                SelectObject(dc, old_brush);
+            }
             MoveToEx(dc, area.left + 6, area.top + row * 5 + 2, nullptr);
             LineTo(dc, area.right, area.top + row * 5 + 2);
         }
@@ -455,6 +647,17 @@ void draw_format_glyph(HWND toolbar, HDC dc, const FormatButton& spec,
         const int glyph = area.bottom - area.top;
         StretchBlt(dc, area.left, area.top, glyph, glyph, sprite_dc,
                    12 * kSpriteCell, 0, kSpriteCell, kSpriteCell, SRCCOPY);
+        return;
+    }
+    if (spec.glyph == FormatGlyph::borders) {
+        Rectangle(dc, area.left + 1, area.top + 1,
+                  area.right - 1, area.bottom - 1);
+        const int middle_x = (area.left + area.right) / 2;
+        const int middle_y = (area.top + area.bottom) / 2;
+        MoveToEx(dc, middle_x, area.top + 1, nullptr);
+        LineTo(dc, middle_x, area.bottom - 1);
+        MoveToEx(dc, area.left + 1, middle_y, nullptr);
+        LineTo(dc, area.right - 1, middle_y);
     }
 }
 
@@ -467,43 +670,49 @@ void paint_toolbar(HWND toolbar, ToolbarState& state) {
     FillRect(dc, &client, face);
     DeleteObject(face);
 
-    HPEN separator = CreatePen(PS_SOLID, 1, kButtonShadow);
-    HPEN highlight = CreatePen(PS_SOLID, 1, kButtonHighlight);
-    HPEN old_pen = static_cast<HPEN>(SelectObject(dc, separator));
-    const int row_line = scale(toolbar, 32);
-    MoveToEx(dc, 0, row_line, nullptr);
-    LineTo(dc, client.right, row_line);
-    SelectObject(dc, highlight);
-    MoveToEx(dc, 0, row_line + 1, nullptr);
-    LineTo(dc, client.right, row_line + 1);
-    SelectObject(dc, old_pen);
-    DeleteObject(separator);
-    DeleteObject(highlight);
+    if (state.standard_visible && state.formatting_visible) {
+        HPEN separator = CreatePen(PS_SOLID, 1, kButtonShadow);
+        HPEN highlight = CreatePen(PS_SOLID, 1, kButtonHighlight);
+        HPEN old_pen = static_cast<HPEN>(SelectObject(dc, separator));
+        const int row_line = scale(toolbar, 32);
+        MoveToEx(dc, 0, row_line, nullptr);
+        LineTo(dc, client.right, row_line);
+        SelectObject(dc, highlight);
+        MoveToEx(dc, 0, row_line + 1, nullptr);
+        LineTo(dc, client.right, row_line + 1);
+        SelectObject(dc, old_pen);
+        DeleteObject(separator);
+        DeleteObject(highlight);
+    }
 
     HDC sprite_dc = CreateCompatibleDC(dc);
     HBITMAP old_bitmap = state.sprite != nullptr ?
         static_cast<HBITMAP>(SelectObject(sprite_dc, state.sprite)) : nullptr;
-    for (int index = 0; index < static_cast<int>(kStandardButtons.size());
-         ++index) {
-        RECT rect = standard_button_rect(toolbar, index);
-        const bool down =
-            (state.pressed.hit && !state.pressed.format &&
-             state.pressed.index == index) || state.standard_latched[index];
-        draw_classic_edge(dc, rect, down);
-        if (state.sprite != nullptr) {
-            draw_standard_glyph(toolbar, dc, sprite_dc,
-                                kStandardButtons[index], rect, down);
+    if (state.standard_visible) {
+        for (int index = 0;
+             index < static_cast<int>(kStandardButtons.size()); ++index) {
+            RECT rect = standard_button_rect(toolbar, index);
+            const bool down =
+                (state.pressed.hit && !state.pressed.format &&
+                 state.pressed.index == index) || state.standard_latched[index];
+            draw_classic_edge(dc, rect, down);
+            if (state.sprite != nullptr) {
+                draw_standard_glyph(toolbar, dc, sprite_dc,
+                                    kStandardButtons[index], rect, down);
+            }
         }
     }
-    for (int index = 0; index < static_cast<int>(kFormatButtons.size());
-         ++index) {
-        RECT rect = format_button_rect(toolbar, index);
-        const bool down =
-            (state.pressed.hit && state.pressed.format &&
-             state.pressed.index == index) || state.format_latched[index];
-        draw_classic_edge(dc, rect, down);
-        draw_format_glyph(toolbar, dc, kFormatButtons[index], rect, down,
-                          state.sprite != nullptr ? sprite_dc : nullptr);
+    if (state.formatting_visible) {
+        for (int index = 0;
+             index < static_cast<int>(kFormatButtons.size()); ++index) {
+            RECT rect = format_button_rect(toolbar, state, index);
+            const bool down =
+                (state.pressed.hit && state.pressed.format &&
+                 state.pressed.index == index) || state.format_latched[index];
+            draw_classic_edge(dc, rect, down);
+            draw_format_glyph(toolbar, dc, kFormatButtons[index], rect, down,
+                              state.sprite != nullptr ? sprite_dc : nullptr);
+        }
     }
     if (old_bitmap != nullptr) {
         SelectObject(sprite_dc, old_bitmap);
@@ -512,19 +721,23 @@ void paint_toolbar(HWND toolbar, ToolbarState& state) {
     EndPaint(toolbar, &paint);
 }
 
-HitResult hit_test(HWND toolbar, POINT point) {
-    for (int index = 0; index < static_cast<int>(kStandardButtons.size());
-         ++index) {
-        RECT rect = standard_button_rect(toolbar, index);
-        if (PtInRect(&rect, point)) {
-            return {true, false, index, kStandardButtons[index].command};
+HitResult hit_test(HWND toolbar, const ToolbarState& state, POINT point) {
+    if (state.standard_visible) {
+        for (int index = 0;
+             index < static_cast<int>(kStandardButtons.size()); ++index) {
+            RECT rect = standard_button_rect(toolbar, index);
+            if (PtInRect(&rect, point)) {
+                return {true, false, index, kStandardButtons[index].command};
+            }
         }
     }
-    for (int index = 0; index < static_cast<int>(kFormatButtons.size());
-         ++index) {
-        RECT rect = format_button_rect(toolbar, index);
-        if (PtInRect(&rect, point)) {
-            return {true, true, index, kFormatButtons[index].command};
+    if (state.formatting_visible) {
+        for (int index = 0;
+             index < static_cast<int>(kFormatButtons.size()); ++index) {
+            RECT rect = format_button_rect(toolbar, state, index);
+            if (PtInRect(&rect, point)) {
+                return {true, true, index, kFormatButtons[index].command};
+            }
         }
     }
     return {};
@@ -683,6 +896,15 @@ void restore_document_focus(HWND source) {
     }
 }
 
+void restore_document_focus_from_root(HWND root) {
+    HWND pane = nullptr;
+    EnumChildWindows(root, find_document_pane,
+                     reinterpret_cast<LPARAM>(&pane));
+    if (pane != nullptr) {
+        SetFocus(pane);
+    }
+}
+
 void forward_combo(HWND mirror, HWND source, int notification,
                    bool& edit_dirty) {
     if (mirror == nullptr || source == nullptr || !IsWindow(source)) {
@@ -744,7 +966,7 @@ void forward_combo(HWND mirror, HWND source, int notification,
 }
 
 void position_combos(HWND toolbar, ToolbarState& state) {
-    const int y = scale(toolbar, 35);
+    const int y = formatting_row_top(toolbar, state) + scale(toolbar, 1);
     // For CBS_DROPDOWN the window height also reserves the popup list. The
     // visible, closed control still uses its system edit-field height.
     const int height = scale(toolbar, 220);
@@ -754,9 +976,22 @@ void position_combos(HWND toolbar, ToolbarState& state) {
     const int width_font = scale(toolbar, 146);
     const int x_size = scale(toolbar, 276);
     const int width_size = scale(toolbar, 52);
+    ShowWindow(state.style_combo,
+               state.formatting_visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+    ShowWindow(state.font_combo,
+               state.formatting_visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+    ShowWindow(state.size_combo,
+               state.formatting_visible ? SW_SHOWNOACTIVATE : SW_HIDE);
     MoveWindow(state.style_combo, x_style, y, width_style, height, TRUE);
     MoveWindow(state.font_combo, x_font, y, width_font, height, TRUE);
     MoveWindow(state.size_combo, x_size, y, width_size, height, TRUE);
+
+    if (state.zoom_combo != nullptr) {
+        ShowWindow(state.zoom_combo,
+                   state.standard_visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+        MoveWindow(state.zoom_combo, standard_buttons_end(toolbar),
+                   scale(toolbar, 3), scale(toolbar, 82), height, TRUE);
+    }
 }
 
 HWND create_combo(HWND toolbar, UINT id) {
@@ -769,6 +1004,1001 @@ HWND create_combo(HWND toolbar, UINT id) {
         GetModuleHandleW(nullptr), nullptr);
     set_window_classic(combo);
     return combo;
+}
+
+HWND create_zoom_combo(HWND toolbar) {
+    HWND combo = CreateWindowExW(
+        0, L"COMBOBOX", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+            CBS_DROPDOWNLIST,
+        0, 0, 10, 200, toolbar,
+        reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kComboZoom)),
+        GetModuleHandleW(nullptr), nullptr);
+    set_window_classic(combo);
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(L"100%"));
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(L"Page Width"));
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(L"Whole Page"));
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(L"Print Preview"));
+    SendMessageW(combo, CB_SETCURSEL, 0, 0);
+    return combo;
+}
+
+void update_toolbar_menu_checks(HWND app, const ToolbarState& state) {
+    const UINT standard = MF_BYCOMMAND |
+        (state.standard_visible ? MF_CHECKED : MF_UNCHECKED);
+    const UINT formatting = MF_BYCOMMAND |
+        (state.formatting_visible ? MF_CHECKED : MF_UNCHECKED);
+    if (g_toolbars_menu != nullptr && IsMenu(g_toolbars_menu)) {
+        CheckMenuItem(g_toolbars_menu, kCmdToggleStandardToolbar, standard);
+        CheckMenuItem(g_toolbars_menu, kCmdToggleFormattingToolbar,
+                      formatting);
+    }
+    HMENU root = GetMenu(app);
+    if (root != nullptr) {
+        CheckMenuItem(root, kCmdToggleStandardToolbar, standard);
+        CheckMenuItem(root, kCmdToggleFormattingToolbar, formatting);
+    }
+}
+
+void request_toolbar_layout(HWND app, HWND toolbar) {
+    if (app == nullptr || toolbar == nullptr) {
+        return;
+    }
+    RECT client{};
+    GetClientRect(app, &client);
+    const int height = toolbar_height(toolbar);
+    ShowWindow(toolbar, height > 0 ? SW_SHOWNOACTIVATE : SW_HIDE);
+    MoveWindow(toolbar, 0, 0, client.right - client.left, height, TRUE);
+    const UINT size_type = IsZoomed(app) ? SIZE_MAXIMIZED : SIZE_RESTORED;
+    SendMessageW(app, WM_SIZE, size_type,
+                 MAKELPARAM(client.right - client.left,
+                            client.bottom - client.top));
+    InvalidateRect(app, nullptr, TRUE);
+    DrawMenuBar(app);
+}
+
+void toggle_toolbar_row(HWND app, HWND toolbar, bool standard) {
+    ToolbarState* state = toolbar_state(toolbar);
+    if (state == nullptr) {
+        return;
+    }
+    if (standard) {
+        state->standard_visible = !state->standard_visible;
+    } else {
+        state->formatting_visible = !state->formatting_visible;
+    }
+    state->pressed = {};
+    position_combos(toolbar, *state);
+    update_toolbar_menu_checks(app, *state);
+    request_toolbar_layout(app, toolbar);
+}
+
+void show_toolbar_context_menu(HWND toolbar, POINT screen_point) {
+    ToolbarState* state = toolbar_state(toolbar);
+    if (state == nullptr) {
+        return;
+    }
+    HMENU popup = CreatePopupMenu();
+    if (popup == nullptr) {
+        return;
+    }
+    AppendMenuW(popup,
+                MF_STRING |
+                    (state->standard_visible ? MF_CHECKED : MF_UNCHECKED),
+                kCmdToggleStandardToolbar, L"&Standard");
+    AppendMenuW(popup,
+                MF_STRING |
+                    (state->formatting_visible ? MF_CHECKED : MF_UNCHECKED),
+                kCmdToggleFormattingToolbar, L"&Formatting");
+    AppendMenuW(popup, MF_STRING, bcmRuler, L"&Ruler");
+    AppendMenuW(popup, MF_STRING, bcmStatusArea, L"&Status Bar");
+    AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(popup, MF_STRING, bcmCustomize, L"&Customize...");
+    style_menu_tree(popup);
+    const UINT command = TrackPopupMenu(
+        popup, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+        screen_point.x, screen_point.y, 0, GetParent(toolbar), nullptr);
+    DestroyMenu(popup);
+    if (command != 0) {
+        PostMessageW(GetParent(toolbar), WM_COMMAND,
+                     MAKEWPARAM(command, 0), 0);
+    }
+}
+
+WNDPROC original_pane_proc(HWND pane) {
+    return reinterpret_cast<WNDPROC>(
+        GetPropW(pane, kOriginalPaneProcProperty));
+}
+
+void redraw_vertical_ruler(HWND pane) {
+    RECT ruler{};
+    GetClientRect(pane, &ruler);
+    ruler.right = std::min(ruler.right, ruler.left + scale(pane, 22));
+    InvalidateRect(pane, &ruler, FALSE);
+    UpdateWindow(pane);
+}
+
+bool vertical_margin_marker_at(HWND pane, POINT point, bool* top_marker) {
+    RECT client{};
+    GetClientRect(pane, &client);
+    if (point.x < client.left ||
+        point.x >= client.left + scale(pane, 22)) {
+        return false;
+    }
+
+    int page_top = 0;
+    int page_bottom = 0;
+    int top_margin = 0;
+    int bottom_margin = 0;
+    int pixels_per_inch = 0;
+    if (!OpusGetWin95VerticalRulerMetrics(
+            pane, &page_top, &page_bottom, &top_margin, &bottom_margin,
+            &pixels_per_inch)) {
+        return false;
+    }
+
+    const int top_y = page_top + top_margin;
+    const int bottom_y = page_bottom - bottom_margin;
+    const int hit_radius = scale(pane, 7);
+    const int top_distance = std::abs(point.y - top_y);
+    const int bottom_distance = std::abs(point.y - bottom_y);
+    if (top_distance > hit_radius && bottom_distance > hit_radius) {
+        return false;
+    }
+    *top_marker = top_distance <= bottom_distance;
+    return true;
+}
+
+void update_vertical_margin_drag(HWND pane, int y) {
+    if (!g_vertical_ruler_drag.active ||
+        g_vertical_ruler_drag.pane != pane) {
+        return;
+    }
+
+    int page_top = 0;
+    int page_bottom = 0;
+    int top_margin = 0;
+    int bottom_margin = 0;
+    int pixels_per_inch = 0;
+    if (!OpusGetWin95VerticalRulerMetrics(
+            pane, &page_top, &page_bottom, &top_margin, &bottom_margin,
+            &pixels_per_inch)) {
+        return;
+    }
+
+    const int minimum_text_height = std::max(
+        scale(pane, 12), std::max(1, pixels_per_inch / 4));
+    if (g_vertical_ruler_drag.top) {
+        const int bottom_y = page_bottom - bottom_margin;
+        y = std::max(page_top,
+                     std::min(y, bottom_y - minimum_text_height));
+    } else {
+        const int top_y = page_top + top_margin;
+        y = std::max(top_y + minimum_text_height,
+                     std::min(y, page_bottom));
+    }
+    if (y != g_vertical_ruler_drag.preview_y) {
+        g_vertical_ruler_drag.preview_y = y;
+        redraw_vertical_ruler(pane);
+    }
+}
+
+void cancel_vertical_margin_drag(HWND pane) {
+    if (!g_vertical_ruler_drag.active ||
+        g_vertical_ruler_drag.pane != pane) {
+        return;
+    }
+    g_vertical_ruler_drag = {};
+    redraw_vertical_ruler(pane);
+}
+
+void draw_vertical_ruler(HWND pane, HDC dc) {
+    RECT client{};
+    GetClientRect(pane, &client);
+    const int width = scale(pane, 22);
+    RECT ruler{client.left, client.top,
+               std::min(client.right, client.left + width), client.bottom};
+    HBRUSH outside_brush = CreateSolidBrush(kButtonFace);
+    FillRect(dc, &ruler, outside_brush);
+    DeleteObject(outside_brush);
+
+    int page_top = 0;
+    int page_bottom = 0;
+    int top_margin = 0;
+    int bottom_margin = 0;
+    int pixels_per_inch = 0;
+    if (!OpusGetWin95VerticalRulerMetrics(
+            pane, &page_top, &page_bottom, &top_margin, &bottom_margin,
+            &pixels_per_inch) || pixels_per_inch <= 0) {
+        return;
+    }
+
+    int active_top = page_top + top_margin;
+    int active_bottom = page_bottom - bottom_margin;
+    if (g_vertical_ruler_drag.active &&
+        g_vertical_ruler_drag.pane == pane) {
+        if (g_vertical_ruler_drag.top) {
+            active_top = g_vertical_ruler_drag.preview_y;
+        } else {
+            active_bottom = g_vertical_ruler_drag.preview_y;
+        }
+    }
+    RECT writable{ruler.left, active_top, ruler.right, active_bottom};
+    writable.top = std::max(ruler.top, writable.top);
+    writable.bottom = std::min(ruler.bottom, writable.bottom);
+    if (writable.bottom > writable.top) {
+        HBRUSH active_brush = CreateSolidBrush(RGB(255, 255, 255));
+        FillRect(dc, &writable, active_brush);
+        DeleteObject(active_brush);
+        DrawEdge(dc, &writable, EDGE_SUNKEN, BF_TOP | BF_BOTTOM);
+    }
+    DrawEdge(dc, &ruler, EDGE_RAISED, BF_LEFT | BF_RIGHT);
+
+    HPEN active_pen = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));
+    HPEN subdued_pen = CreatePen(PS_SOLID, 1, RGB(96, 96, 96));
+    HPEN previous_pen = static_cast<HPEN>(SelectObject(dc, active_pen));
+    HFONT previous_font = static_cast<HFONT>(
+        SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT)));
+    const int previous_bk = SetBkMode(dc, TRANSPARENT);
+    const COLORREF previous_text = SetTextColor(dc, RGB(0, 0, 0));
+    const int eighth = std::max(1, pixels_per_inch / 8);
+    int tick_index = 0;
+    for (int y = page_top; y < page_bottom && y < ruler.bottom;
+         y += eighth, ++tick_index) {
+        if (y < ruler.top) {
+            continue;
+        }
+        const bool writable_tick = y >= active_top && y <= active_bottom;
+        SelectObject(dc, writable_tick ? active_pen : subdued_pen);
+        int length = scale(pane, 3);
+        if (tick_index % 8 == 0) {
+            length = scale(pane, 9);
+        } else if (tick_index % 4 == 0) {
+            length = scale(pane, 7);
+        } else if (tick_index % 2 == 0) {
+            length = scale(pane, 5);
+        }
+        MoveToEx(dc, ruler.right - scale(pane, 2) - length, y, nullptr);
+        LineTo(dc, ruler.right - scale(pane, 2), y);
+        if (tick_index > 0 && tick_index % 8 == 0) {
+            const std::wstring label = std::to_wstring(tick_index / 8);
+            SetTextColor(dc, writable_tick ? RGB(0, 0, 0) :
+                                             RGB(80, 80, 80));
+            TextOutW(dc, ruler.left + scale(pane, 3),
+                     y - scale(pane, 6), label.c_str(),
+                     static_cast<int>(label.size()));
+        }
+    }
+
+    SelectObject(dc, active_pen);
+    SetTextColor(dc, RGB(0, 0, 0));
+    const int marker_x = ruler.right - scale(pane, 2);
+    const int marker_half = scale(pane, 4);
+    const auto draw_margin_marker = [&](int y) {
+        if (y < ruler.top || y >= ruler.bottom) {
+            return;
+        }
+        POINT points[3]{{marker_x, y},
+                        {marker_x - marker_half, y - marker_half},
+                        {marker_x - marker_half, y + marker_half}};
+        HBRUSH marker = CreateSolidBrush(RGB(255, 255, 255));
+        HBRUSH old = static_cast<HBRUSH>(SelectObject(dc, marker));
+        Polygon(dc, points, 3);
+        SelectObject(dc, old);
+        DeleteObject(marker);
+    };
+    draw_margin_marker(active_top);
+    draw_margin_marker(active_bottom);
+
+    SetTextColor(dc, previous_text);
+    SetBkMode(dc, previous_bk);
+    SelectObject(dc, previous_font);
+    SelectObject(dc, previous_pen);
+    DeleteObject(active_pen);
+    DeleteObject(subdued_pen);
+}
+
+bool horizontal_margin_boundary_at(HWND overlay, POINT point,
+                                   bool* left_boundary) {
+    HWND ruler = GetParent(overlay);
+    RECT client{};
+    GetClientRect(overlay, &client);
+    /* Keep the lower marker lane transparent so native indent/tab dragging
+       continues to use the original ruler implementation. */
+    if (point.y < client.top ||
+        point.y >= client.bottom - scale(ruler, 7)) {
+        return false;
+    }
+
+    int zero = 0;
+    int active_left = 0;
+    int active_right = 0;
+    int pixels_per_inch = 0;
+    int left_indent = 0;
+    int first_indent = 0;
+    int right_indent = 0;
+    int default_tab = 0;
+    int tab_count = 0;
+    std::array<int, 1> tab_positions{};
+    std::array<unsigned char, 1> tab_types{};
+    if (!OpusGetWin95HorizontalRulerMetrics(
+            ruler, &zero, &active_left, &active_right, &pixels_per_inch,
+            &left_indent, &first_indent, &right_indent, &default_tab,
+            &tab_count, tab_positions.data(), tab_types.data(), 0)) {
+        return false;
+    }
+    const int hit_radius = scale(ruler, 5);
+    const int left_distance = std::abs(point.x - active_left);
+    const int right_distance = std::abs(point.x - active_right);
+    if (left_distance > hit_radius && right_distance > hit_radius) {
+        return false;
+    }
+    *left_boundary = left_distance <= right_distance;
+    return true;
+}
+
+void redraw_horizontal_ruler_overlay(HWND overlay) {
+    InvalidateRect(overlay, nullptr, FALSE);
+    UpdateWindow(overlay);
+}
+
+void update_horizontal_margin_drag(HWND overlay, int x) {
+    if (!g_horizontal_ruler_drag.active ||
+        g_horizontal_ruler_drag.overlay != overlay) {
+        return;
+    }
+    HWND ruler = g_horizontal_ruler_drag.ruler;
+    int zero = 0;
+    int active_left = 0;
+    int active_right = 0;
+    int pixels_per_inch = 0;
+    int left_indent = 0;
+    int first_indent = 0;
+    int right_indent = 0;
+    int default_tab = 0;
+    int tab_count = 0;
+    int left_margin = 0;
+    int right_margin = 0;
+    std::array<int, 1> tab_positions{};
+    std::array<unsigned char, 1> tab_types{};
+    if (!OpusGetWin95HorizontalRulerMetrics(
+            ruler, &zero, &active_left, &active_right, &pixels_per_inch,
+            &left_indent, &first_indent, &right_indent, &default_tab,
+            &tab_count, tab_positions.data(), tab_types.data(), 0) ||
+        !OpusGetWin95HorizontalPageMargins(
+            ruler, &left_margin, &right_margin)) {
+        return;
+    }
+    const int minimum_text_width = std::max(
+        scale(ruler, 12), std::max(1, pixels_per_inch / 4));
+    if (g_horizontal_ruler_drag.left) {
+        x = std::max(active_left - left_margin,
+                     std::min(x, active_right - minimum_text_width));
+    } else {
+        x = std::max(active_left + minimum_text_width,
+                     std::min(x, active_right + right_margin));
+    }
+    if (x != g_horizontal_ruler_drag.preview_x) {
+        g_horizontal_ruler_drag.preview_x = x;
+        redraw_horizontal_ruler_overlay(overlay);
+    }
+}
+
+void cancel_horizontal_margin_drag(HWND overlay) {
+    if (!g_horizontal_ruler_drag.active ||
+        g_horizontal_ruler_drag.overlay != overlay) {
+        return;
+    }
+    g_horizontal_ruler_drag = {};
+    redraw_horizontal_ruler_overlay(overlay);
+}
+
+void draw_horizontal_ruler(HWND ruler, HDC dc) {
+    RECT client{};
+    GetClientRect(ruler, &client);
+    if (client.right <= client.left || client.bottom <= client.top) {
+        return;
+    }
+
+    int zero = 0;
+    int active_left = 0;
+    int active_right = 0;
+    int pixels_per_inch = 0;
+    int left_indent = 0;
+    int first_indent = 0;
+    int right_indent = 0;
+    int default_tab = 0;
+    int tab_count = 0;
+    std::array<int, 32> tab_positions{};
+    std::array<unsigned char, 32> tab_types{};
+    if (!OpusGetWin95HorizontalRulerMetrics(
+            ruler, &zero, &active_left, &active_right, &pixels_per_inch,
+            &left_indent, &first_indent, &right_indent, &default_tab,
+            &tab_count, tab_positions.data(), tab_types.data(),
+            static_cast<int>(tab_positions.size())) || pixels_per_inch <= 0) {
+        return;
+    }
+
+    if (g_horizontal_ruler_drag.active &&
+        g_horizontal_ruler_drag.ruler == ruler) {
+        const int delta = g_horizontal_ruler_drag.preview_x -
+                          g_horizontal_ruler_drag.origin_x;
+        if (g_horizontal_ruler_drag.left) {
+            active_left = g_horizontal_ruler_drag.preview_x;
+            zero += delta;
+            left_indent += delta;
+            first_indent += delta;
+            for (int index = 0; index < tab_count; ++index) {
+                tab_positions[index] += delta;
+            }
+        } else {
+            active_right = g_horizontal_ruler_drag.preview_x;
+            right_indent += delta;
+        }
+    }
+
+    active_left = std::max<int>(static_cast<int>(client.left),
+                                std::min<int>(active_left,
+                                              static_cast<int>(client.right)));
+    active_right = std::max<int>(static_cast<int>(client.left),
+                                 std::min<int>(active_right,
+                                               static_cast<int>(client.right)));
+    HBRUSH outside_brush = CreateSolidBrush(kButtonFace);
+    FillRect(dc, &client, outside_brush);
+    DeleteObject(outside_brush);
+
+    RECT active{active_left, client.top, active_right, client.bottom};
+    if (active.right > active.left) {
+        HBRUSH active_brush = CreateSolidBrush(RGB(255, 255, 255));
+        FillRect(dc, &active, active_brush);
+        DeleteObject(active_brush);
+        DrawEdge(dc, &active, EDGE_SUNKEN, BF_LEFT | BF_RIGHT);
+    }
+    DrawEdge(dc, &client, EDGE_RAISED, BF_TOP | BF_BOTTOM);
+
+    HPEN active_pen = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));
+    HPEN subdued_pen = CreatePen(PS_SOLID, 1, RGB(96, 96, 96));
+    HPEN previous_pen = static_cast<HPEN>(SelectObject(dc, active_pen));
+    HFONT previous_font = static_cast<HFONT>(
+        SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT)));
+    const int previous_bk = SetBkMode(dc, TRANSPARENT);
+    const COLORREF previous_text = SetTextColor(dc, RGB(0, 0, 0));
+
+    const int scale_line = std::max(client.top + 8, client.bottom - 8);
+    MoveToEx(dc, client.left, scale_line, nullptr);
+    LineTo(dc, client.right, scale_line);
+    const int eighth = std::max(1, pixels_per_inch / 8);
+    int first_tick = (client.left - zero) / eighth;
+    if (zero + first_tick * eighth > client.left) {
+        --first_tick;
+    }
+    for (int tick = first_tick;; ++tick) {
+        const int x = zero + tick * eighth;
+        if (x > client.right) {
+            break;
+        }
+        if (x < client.left) {
+            continue;
+        }
+        const bool writable = x >= active_left && x <= active_right;
+        SelectObject(dc, writable ? active_pen : subdued_pen);
+        int length = 2;
+        if (tick % 8 == 0) {
+            length = 7;
+        } else if (tick % 4 == 0) {
+            length = 5;
+        } else if (tick % 2 == 0) {
+            length = 3;
+        }
+        MoveToEx(dc, x, scale_line, nullptr);
+        LineTo(dc, x, scale_line - length);
+        if (tick % 8 == 0) {
+            const std::wstring label = std::to_wstring(tick / 8);
+            SetTextColor(dc, writable ? RGB(0, 0, 0) : RGB(80, 80, 80));
+            TextOutW(dc, x + 3, client.top - 1, label.c_str(),
+                     static_cast<int>(label.size()));
+        }
+    }
+
+    SelectObject(dc, active_pen);
+    SetTextColor(dc, RGB(0, 0, 0));
+    if (default_tab > 0) {
+        for (int x = active_left + default_tab;
+             x < active_right; x += default_tab) {
+            Rectangle(dc, x - 1, client.bottom - 4,
+                      x + 2, client.bottom - 2);
+        }
+    }
+
+    for (int index = 0; index < tab_count; ++index) {
+        const int x = tab_positions[index];
+        const int top = scale_line + 1;
+        const int bottom = client.bottom - 2;
+        MoveToEx(dc, x, top, nullptr);
+        LineTo(dc, x, bottom);
+        switch (tab_types[index] & 7) {
+        case 0:
+            LineTo(dc, x + 5, bottom);
+            break;
+        case 1:
+            MoveToEx(dc, x - 4, bottom, nullptr);
+            LineTo(dc, x + 5, bottom);
+            break;
+        case 2:
+            LineTo(dc, x - 5, bottom);
+            break;
+        default:
+            MoveToEx(dc, x - 3, bottom, nullptr);
+            LineTo(dc, x + 2, bottom);
+            SetPixel(dc, x + 4, bottom - 1, RGB(0, 0, 0));
+            break;
+        }
+    }
+
+    HBRUSH marker_brush = CreateSolidBrush(RGB(255, 255, 255));
+    HBRUSH previous_brush = static_cast<HBRUSH>(
+        SelectObject(dc, marker_brush));
+    const int marker_top = scale_line + 1;
+    const int marker_bottom = client.bottom - 1;
+    auto down_triangle = [&](int x) {
+        POINT points[3]{{x - 5, marker_top}, {x + 5, marker_top},
+                        {x, std::min(marker_bottom, marker_top + 6)}};
+        Polygon(dc, points, 3);
+    };
+    auto up_triangle = [&](int x, bool with_base) {
+        POINT points[3]{{x - 5, marker_bottom - 2},
+                        {x + 5, marker_bottom - 2},
+                        {x, std::max(marker_top, marker_bottom - 8)}};
+        Polygon(dc, points, 3);
+        if (with_base) {
+            Rectangle(dc, x - 3, marker_bottom - 2,
+                      x + 4, marker_bottom + 1);
+        }
+    };
+    down_triangle(first_indent);
+    up_triangle(left_indent, true);
+    up_triangle(right_indent, false);
+    SelectObject(dc, previous_brush);
+    DeleteObject(marker_brush);
+
+    SetTextColor(dc, previous_text);
+    SetBkMode(dc, previous_bk);
+    SelectObject(dc, previous_font);
+    SelectObject(dc, previous_pen);
+    DeleteObject(active_pen);
+    DeleteObject(subdued_pen);
+}
+
+LRESULT CALLBACK ruler_overlay_proc(HWND overlay, UINT message,
+                                    WPARAM w_param, LPARAM l_param) {
+    switch (message) {
+    case WM_NCHITTEST: {
+        if (g_horizontal_ruler_drag.active &&
+            g_horizontal_ruler_drag.overlay == overlay) {
+            return HTCLIENT;
+        }
+        POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
+        ScreenToClient(overlay, &point);
+        bool left_boundary = false;
+        return horizontal_margin_boundary_at(
+                   overlay, point, &left_boundary) ?
+                   HTCLIENT : HTTRANSPARENT;
+    }
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+    case WM_SETCURSOR:
+        SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32644)));
+        return TRUE;
+    case WM_LBUTTONDOWN: {
+        POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
+        bool left_boundary = false;
+        if (!horizontal_margin_boundary_at(
+                overlay, point, &left_boundary)) {
+            return 0;
+        }
+        HWND ruler = GetParent(overlay);
+        int zero = 0;
+        int active_left = 0;
+        int active_right = 0;
+        int pixels_per_inch = 0;
+        int left_indent = 0;
+        int first_indent = 0;
+        int right_indent = 0;
+        int default_tab = 0;
+        int tab_count = 0;
+        std::array<int, 1> tab_positions{};
+        std::array<unsigned char, 1> tab_types{};
+        if (OpusGetWin95HorizontalRulerMetrics(
+                ruler, &zero, &active_left, &active_right,
+                &pixels_per_inch, &left_indent, &first_indent,
+                &right_indent, &default_tab, &tab_count,
+                tab_positions.data(), tab_types.data(), 0)) {
+            g_horizontal_ruler_drag.overlay = overlay;
+            g_horizontal_ruler_drag.ruler = ruler;
+            g_horizontal_ruler_drag.active = true;
+            g_horizontal_ruler_drag.left = left_boundary;
+            g_horizontal_ruler_drag.origin_x = left_boundary ?
+                active_left : active_right;
+            g_horizontal_ruler_drag.preview_x =
+                g_horizontal_ruler_drag.origin_x;
+            SetCapture(overlay);
+            SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32644)));
+        }
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+        if (g_horizontal_ruler_drag.active &&
+            g_horizontal_ruler_drag.overlay == overlay) {
+            update_horizontal_margin_drag(overlay, GET_X_LPARAM(l_param));
+            SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32644)));
+            return 0;
+        }
+        break;
+    case WM_LBUTTONUP:
+        if (g_horizontal_ruler_drag.active &&
+            g_horizontal_ruler_drag.overlay == overlay) {
+            update_horizontal_margin_drag(overlay, GET_X_LPARAM(l_param));
+            const HWND ruler = g_horizontal_ruler_drag.ruler;
+            const bool left_boundary = g_horizontal_ruler_drag.left;
+            const int delta = g_horizontal_ruler_drag.preview_x -
+                              g_horizontal_ruler_drag.origin_x;
+            g_horizontal_ruler_drag = {};
+            if (GetCapture() == overlay) {
+                ReleaseCapture();
+            }
+            if (!OpusAdjustWin95HorizontalMargin(
+                    ruler, left_boundary ? 1 : 0, delta)) {
+                MessageBeep(MB_ICONEXCLAMATION);
+            }
+            if (IsWindow(overlay)) {
+                redraw_horizontal_ruler_overlay(overlay);
+            }
+            return 0;
+        }
+        break;
+    case WM_CAPTURECHANGED:
+        if (g_horizontal_ruler_drag.active &&
+            g_horizontal_ruler_drag.overlay == overlay &&
+            reinterpret_cast<HWND>(l_param) != overlay) {
+            cancel_horizontal_margin_drag(overlay);
+        }
+        break;
+    case WM_CANCELMODE:
+        if (g_horizontal_ruler_drag.active &&
+            g_horizontal_ruler_drag.overlay == overlay) {
+            g_horizontal_ruler_drag = {};
+            if (GetCapture() == overlay) {
+                ReleaseCapture();
+            }
+            redraw_horizontal_ruler_overlay(overlay);
+            return 0;
+        }
+        break;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(overlay, &paint);
+        if (dc != nullptr) {
+            draw_horizontal_ruler(GetParent(overlay), dc);
+        }
+        EndPaint(overlay, &paint);
+        return 0;
+    }
+    }
+    return DefWindowProcW(overlay, message, w_param, l_param);
+}
+
+void ensure_horizontal_ruler_overlay(HWND ruler) {
+    RECT client{};
+    GetClientRect(ruler, &client);
+    HWND overlay = FindWindowExW(ruler, nullptr, kRulerOverlayClass, nullptr);
+    if (overlay == nullptr) {
+        const LONG_PTR style = GetWindowLongPtrW(ruler, GWL_STYLE);
+        if ((style & WS_CLIPCHILDREN) == 0) {
+            SetWindowLongPtrW(ruler, GWL_STYLE, style | WS_CLIPCHILDREN);
+            SetWindowPos(ruler, nullptr, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                         SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+        overlay = CreateWindowExW(
+            WS_EX_NOACTIVATE,
+            kRulerOverlayClass, L"", WS_CHILD | WS_VISIBLE,
+            0, 0, client.right - client.left, client.bottom - client.top,
+            ruler, nullptr, GetModuleHandleW(nullptr), nullptr);
+    }
+    if (overlay != nullptr) {
+        SetWindowPos(overlay, HWND_TOP, 0, 0,
+                     client.right - client.left, client.bottom - client.top,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        InvalidateRect(overlay, nullptr, FALSE);
+        UpdateWindow(overlay);
+    }
+}
+
+void show_document_context_menu(HWND pane, POINT screen_point) {
+    HMENU popup = CreatePopupMenu();
+    if (popup == nullptr) {
+        return;
+    }
+    AppendMenuW(popup, MF_STRING, bcmUndo, L"&Undo");
+    AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(popup, MF_STRING, bcmCut, L"Cu&t");
+    AppendMenuW(popup, MF_STRING, bcmCopy, L"&Copy");
+    AppendMenuW(popup, MF_STRING, bcmPaste, L"&Paste");
+    AppendMenuW(popup, MF_STRING, bcmSelectAll, L"Select &All");
+    AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(popup, MF_STRING, bcmCharacter, L"&Font...");
+    AppendMenuW(popup, MF_STRING, bcmParagraph, L"&Paragraph...");
+    AppendMenuW(popup, MF_STRING, bcmTabs, L"&Tabs...");
+    AppendMenuW(popup, MF_STRING, imiRenumParas,
+                L"&Bullets and Numbering...");
+    AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(popup, MF_STRING, bcmInsTable, L"Insert &Table...");
+    AppendMenuW(popup, MF_STRING, bcmFormatTable, L"Table &Properties...");
+    AppendMenuW(popup, MF_STRING, bcmInsPic, L"Insert &Picture...");
+    AppendMenuW(popup, MF_STRING, bcmInsField, L"Insert F&ield...");
+    style_menu_tree(popup);
+    const HWND app = GetAncestor(pane, GA_ROOT);
+    const UINT command = TrackPopupMenu(
+        popup, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+        screen_point.x, screen_point.y, 0, app, nullptr);
+    DestroyMenu(popup);
+    if (command != 0) {
+        PostMessageW(app, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+    }
+}
+
+LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
+                                     WPARAM w_param, LPARAM l_param) {
+    WNDPROC original = original_pane_proc(pane);
+    if (message == WM_LBUTTONDOWN) {
+        POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
+        bool top_marker = false;
+        if (vertical_margin_marker_at(pane, point, &top_marker)) {
+            int page_top = 0;
+            int page_bottom = 0;
+            int top_margin = 0;
+            int bottom_margin = 0;
+            int pixels_per_inch = 0;
+            if (OpusGetWin95VerticalRulerMetrics(
+                    pane, &page_top, &page_bottom, &top_margin,
+                    &bottom_margin, &pixels_per_inch)) {
+                g_vertical_ruler_drag.pane = pane;
+                g_vertical_ruler_drag.active = true;
+                g_vertical_ruler_drag.top = top_marker;
+                g_vertical_ruler_drag.preview_y = top_marker ?
+                    page_top + top_margin : page_bottom - bottom_margin;
+                SetFocus(pane);
+                SetCapture(pane);
+                SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32645)));
+                return 0;
+            }
+        }
+    }
+    if (message == WM_MOUSEMOVE) {
+        if (g_vertical_ruler_drag.active &&
+            g_vertical_ruler_drag.pane == pane) {
+            update_vertical_margin_drag(pane, GET_Y_LPARAM(l_param));
+            SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32645)));
+            return 0;
+        }
+        POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
+        bool top_marker = false;
+        if (vertical_margin_marker_at(pane, point, &top_marker)) {
+            SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32645)));
+            return 0;
+        }
+    }
+    if (message == WM_LBUTTONUP && g_vertical_ruler_drag.active &&
+        g_vertical_ruler_drag.pane == pane) {
+        update_vertical_margin_drag(pane, GET_Y_LPARAM(l_param));
+        int page_top = 0;
+        int page_bottom = 0;
+        int top_margin = 0;
+        int bottom_margin = 0;
+        int pixels_per_inch = 0;
+        const bool have_metrics = OpusGetWin95VerticalRulerMetrics(
+            pane, &page_top, &page_bottom, &top_margin, &bottom_margin,
+            &pixels_per_inch) != 0;
+        const bool top_marker = g_vertical_ruler_drag.top;
+        const int preview_y = g_vertical_ruler_drag.preview_y;
+        g_vertical_ruler_drag = {};
+        if (GetCapture() == pane) {
+            ReleaseCapture();
+        }
+        if (have_metrics) {
+            const int margin_pixels = top_marker ?
+                preview_y - page_top : page_bottom - preview_y;
+            if (!OpusSetWin95VerticalMargin(
+                    pane, top_marker ? 1 : 0, margin_pixels)) {
+                MessageBeep(MB_ICONEXCLAMATION);
+            }
+        }
+        redraw_vertical_ruler(pane);
+        return 0;
+    }
+    if (message == WM_KEYDOWN && w_param == VK_ESCAPE &&
+        g_vertical_ruler_drag.active &&
+        g_vertical_ruler_drag.pane == pane) {
+        g_vertical_ruler_drag = {};
+        if (GetCapture() == pane) {
+            ReleaseCapture();
+        }
+        redraw_vertical_ruler(pane);
+        return 0;
+    }
+    if (message == WM_CAPTURECHANGED &&
+        g_vertical_ruler_drag.active &&
+        g_vertical_ruler_drag.pane == pane &&
+        reinterpret_cast<HWND>(l_param) != pane) {
+        cancel_vertical_margin_drag(pane);
+    }
+    if (message == WM_CANCELMODE && g_vertical_ruler_drag.active &&
+        g_vertical_ruler_drag.pane == pane) {
+        g_vertical_ruler_drag = {};
+        if (GetCapture() == pane) {
+            ReleaseCapture();
+        }
+        redraw_vertical_ruler(pane);
+        return 0;
+    }
+    if (message == WM_SETCURSOR && LOWORD(l_param) == HTCLIENT) {
+        POINT point{};
+        GetCursorPos(&point);
+        ScreenToClient(pane, &point);
+        bool top_marker = false;
+        if ((g_vertical_ruler_drag.active &&
+             g_vertical_ruler_drag.pane == pane) ||
+            vertical_margin_marker_at(pane, point, &top_marker)) {
+            SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32645)));
+            return TRUE;
+        }
+    }
+    if (message == WM_PAINT) {
+        const LRESULT result = original != nullptr ?
+            CallWindowProcW(original, pane, message, w_param, l_param) :
+            DefWindowProcW(pane, message, w_param, l_param);
+        HDC dc = GetDC(pane);
+        if (dc != nullptr) {
+            draw_vertical_ruler(pane, dc);
+            ReleaseDC(pane, dc);
+        }
+        return result;
+    }
+    if (message == WM_RBUTTONDOWN) {
+        SetFocus(pane);
+        return 0;
+    }
+    if (message == WM_RBUTTONUP) {
+        POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
+        ClientToScreen(pane, &point);
+        show_document_context_menu(pane, point);
+        return 0;
+    }
+    if (message == WM_CONTEXTMENU) {
+        POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
+        if (point.x == -1 && point.y == -1) {
+            GetCursorPos(&point);
+        }
+        show_document_context_menu(pane, point);
+        return 0;
+    }
+    if (message == WM_NCDESTROY) {
+        RemovePropW(pane, kOriginalPaneProcProperty);
+        if (original != nullptr) {
+            SetWindowLongPtrW(pane, GWLP_WNDPROC,
+                              reinterpret_cast<LONG_PTR>(original));
+        }
+    }
+    return original != nullptr ?
+        CallWindowProcW(original, pane, message, w_param, l_param) :
+        DefWindowProcW(pane, message, w_param, l_param);
+}
+
+BOOL CALLBACK subclass_document_pane(HWND candidate, LPARAM) {
+    wchar_t class_name[64]{};
+    GetClassNameW(candidate, class_name,
+                  static_cast<int>(sizeof(class_name) / sizeof(class_name[0])));
+    if (lstrcmpiW(class_name, L"OpusWwd") == 0 &&
+        original_pane_proc(candidate) == nullptr) {
+        SetLastError(0);
+        WNDPROC original = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
+            candidate, GWLP_WNDPROC,
+            reinterpret_cast<LONG_PTR>(document_pane_proc)));
+        if (original != nullptr || GetLastError() == 0) {
+            SetPropW(candidate, kOriginalPaneProcProperty,
+                     reinterpret_cast<HANDLE>(original));
+            RedrawWindow(candidate, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+        }
+    }
+    return TRUE;
+}
+
+BOOL CALLBACK redraw_word95_ruler_window(HWND candidate, LPARAM) {
+    wchar_t class_name[64]{};
+    GetClassNameW(candidate, class_name,
+                  static_cast<int>(sizeof(class_name) / sizeof(class_name[0])));
+    if (lstrcmpiW(class_name, L"OpusRul") == 0 ||
+        lstrcmpiW(class_name, L"OpusWwd") == 0) {
+        RedrawWindow(candidate, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
+    return TRUE;
+}
+
+BOOL CALLBACK paint_word95_horizontal_ruler(HWND candidate, LPARAM) {
+    wchar_t class_name[64]{};
+    GetClassNameW(candidate, class_name,
+                  static_cast<int>(sizeof(class_name) / sizeof(class_name[0])));
+    if (lstrcmpiW(class_name, L"OpusRul") == 0) {
+        ensure_horizontal_ruler_overlay(candidate);
+    }
+    return TRUE;
+}
+
+void subclass_all_document_panes(HWND app) {
+    EnumChildWindows(app, subclass_document_pane, 0);
+}
+
+LRESULT CALLBACK app_window_proc(HWND app, UINT message,
+                                 WPARAM w_param, LPARAM l_param) {
+    WNDPROC original = g_original_app_proc;
+    if (message == WM_COMMAND) {
+        const UINT command = LOWORD(w_param);
+        HWND toolbar = FindWindowExW(app, nullptr, kToolbarClass, nullptr);
+        if (command == bcmPageView) {
+            /* CmdPageView is a legacy toggle.  The restored shell treats the
+               startup Page View choice as a stable document mode, so repeated
+               selections do not accidentally drop back to flush galley view. */
+            if (g_word95_page_view_active) {
+                return 0;
+            }
+            g_word95_page_view_active = true;
+        }
+        if (command == kCmdToggleStandardToolbar) {
+            toggle_toolbar_row(app, toolbar, true);
+            return 0;
+        }
+        if (command == kCmdToggleFormattingToolbar) {
+            toggle_toolbar_row(app, toolbar, false);
+            return 0;
+        }
+    } else if (message == WM_INITMENUPOPUP) {
+        HWND toolbar = FindWindowExW(app, nullptr, kToolbarClass, nullptr);
+        ToolbarState* state = toolbar_state(toolbar);
+        if (state != nullptr) {
+            update_toolbar_menu_checks(app, *state);
+        }
+    } else if (message == WM_NCDESTROY) {
+        g_original_app_proc = nullptr;
+        if (original != nullptr) {
+            SetWindowLongPtrW(app, GWLP_WNDPROC,
+                              reinterpret_cast<LONG_PTR>(original));
+        }
+    }
+    return original != nullptr ?
+        CallWindowProcW(original, app, message, w_param, l_param) :
+        DefWindowProcW(app, message, w_param, l_param);
+}
+
+bool subclass_app_window(HWND app) {
+    if (g_original_app_proc != nullptr) {
+        return true;
+    }
+    SetLastError(0);
+    WNDPROC original = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
+        app, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(app_window_proc)));
+    if (original == nullptr && GetLastError() != 0) {
+        return false;
+    }
+    g_original_app_proc = original;
+    return true;
 }
 
 LRESULT CALLBACK toolbar_window_proc(HWND window, UINT message,
@@ -792,6 +2022,7 @@ LRESULT CALLBACK toolbar_window_proc(HWND window, UINT message,
         created->style_combo = create_combo(window, kComboStyle);
         created->font_combo = create_combo(window, kComboFont);
         created->size_combo = create_combo(window, kComboSize);
+        created->zoom_combo = create_zoom_combo(window);
         SetWindowTextW(created->style_combo, L"Normal");
         SetWindowTextW(created->font_combo, L"Arial");
         SetWindowTextW(created->size_combo, L"10");
@@ -800,6 +2031,8 @@ LRESULT CALLBACK toolbar_window_proc(HWND window, UINT message,
         SendMessageW(created->font_combo, WM_SETFONT,
                      reinterpret_cast<WPARAM>(created->font), FALSE);
         SendMessageW(created->size_combo, WM_SETFONT,
+                     reinterpret_cast<WPARAM>(created->font), FALSE);
+        SendMessageW(created->zoom_combo, WM_SETFONT,
                      reinterpret_cast<WPARAM>(created->font), FALSE);
         position_combos(window, *created);
         sync_mirrors(window, *created);
@@ -815,6 +2048,29 @@ LRESULT CALLBACK toolbar_window_proc(HWND window, UINT message,
         if (state != nullptr && w_param == kSyncTimer) {
             if (GetTickCount64() >= state->suppress_sync_until) {
                 sync_mirrors(window, *state);
+            }
+            HWND app = GetParent(window);
+            subclass_all_document_panes(app);
+            if (state->ruler_refreshes_remaining > 0) {
+                EnumChildWindows(app, redraw_word95_ruler_window, 0);
+                --state->ruler_refreshes_remaining;
+            }
+            if (!state->startup_page_view_requested &&
+                state->page_view_start_after != 0 &&
+                GetTickCount64() >= state->page_view_start_after) {
+                HWND pane = nullptr;
+                EnumChildWindows(app, find_document_pane,
+                                 reinterpret_cast<LPARAM>(&pane));
+                if (pane != nullptr) {
+                    state->startup_page_view_requested = true;
+                    state->ruler_refreshes_remaining = 6;
+                    SendMessageW(state->zoom_combo, CB_SETCURSEL, 1, 0);
+                    PostMessageW(app, WM_COMMAND,
+                                 MAKEWPARAM(bcmPageView, 0), 0);
+                }
+            }
+            if (g_word95_page_view_active) {
+                EnumChildWindows(app, paint_word95_horizontal_ruler, 0);
             }
         }
         return 0;
@@ -842,22 +2098,53 @@ LRESULT CALLBACK toolbar_window_proc(HWND window, UINT message,
                               notification, state->size_edit_dirty);
                 return 0;
             }
+            if (id == kComboZoom && notification == CBN_SELENDOK) {
+                const LRESULT selection = SendMessageW(
+                    state->zoom_combo, CB_GETCURSEL, 0, 0);
+                if (selection == 1) {
+                    PostMessageW(GetParent(window), WM_COMMAND,
+                                 MAKEWPARAM(bcmPageView, 0), 0);
+                } else if (selection == 2 || selection == 3) {
+                    PostMessageW(GetParent(window), WM_COMMAND,
+                                 MAKEWPARAM(bcmPrintPreview, 0), 0);
+                }
+                restore_document_focus_from_root(GetParent(window));
+                return 0;
+            }
         }
         break;
     case WM_LBUTTONDOWN:
         if (state != nullptr) {
             POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
-            state->pressed = hit_test(window, point);
+            state->pressed = hit_test(window, *state, point);
             if (state->pressed.hit) {
                 SetCapture(window);
                 InvalidateRect(window, nullptr, FALSE);
             }
         }
         return 0;
+    case WM_CONTEXTMENU:
+        if (state != nullptr) {
+            POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
+            if (point.x == -1 && point.y == -1) {
+                GetCursorPos(&point);
+            }
+            show_toolbar_context_menu(window, point);
+        }
+        return 0;
+    case WM_RBUTTONDOWN:
+        return 0;
+    case WM_RBUTTONUP:
+        if (state != nullptr) {
+            POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
+            ClientToScreen(window, &point);
+            show_toolbar_context_menu(window, point);
+        }
+        return 0;
     case WM_LBUTTONUP:
         if (state != nullptr && state->pressed.hit) {
             POINT point{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
-            const HitResult released = hit_test(window, point);
+            const HitResult released = hit_test(window, *state, point);
             const HitResult pressed = state->pressed;
             state->pressed = {};
             if (GetCapture() == window) {
@@ -928,12 +2215,31 @@ bool register_toolbar_class() {
            GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
 }
 
+bool register_ruler_overlay_class() {
+    WNDCLASSEXW window_class{};
+    window_class.cbSize = sizeof(window_class);
+    window_class.lpfnWndProc = ruler_overlay_proc;
+    window_class.hInstance = GetModuleHandleW(nullptr);
+    window_class.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+    window_class.lpszClassName = kRulerOverlayClass;
+    return RegisterClassExW(&window_class) != 0 ||
+           GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+}
+
 }  // namespace
+
+extern "C" void OpusDrawWin95HorizontalRuler(HWND ruler) {
+    HDC dc = GetDC(ruler);
+    if (dc != nullptr) {
+        draw_horizontal_ruler(ruler, dc);
+        ReleaseDC(ruler, dc);
+    }
+}
 
 extern "C" HWND vhwndWin95Toolbar = nullptr;
 
 extern "C" int OpusWin95ToolbarHeight(void) {
-    return scale(vhwndWin95Toolbar, 64);
+    return toolbar_height(vhwndWin95Toolbar);
 }
 
 extern "C" int OpusWin95ChromeActive(void) {
@@ -945,6 +2251,11 @@ extern "C" void OpusSyncWin95Toolbar(void) {
         SendMessageW(vhwndWin95Toolbar, WM_TIMER, kSyncTimer, 0);
         configure_word95_menus(GetParent(vhwndWin95Toolbar));
         style_menu_tree(GetMenu(GetParent(vhwndWin95Toolbar)));
+        ToolbarState* state = toolbar_state(vhwndWin95Toolbar);
+        if (state != nullptr) {
+            update_toolbar_menu_checks(GetParent(vhwndWin95Toolbar), *state);
+        }
+        subclass_all_document_panes(GetParent(vhwndWin95Toolbar));
         DrawMenuBar(GetParent(vhwndWin95Toolbar));
     }
 }
@@ -955,15 +2266,18 @@ extern "C" void OpusSizeWin95Toolbar(HWND parent) {
     }
     RECT client{};
     GetClientRect(parent, &client);
+    const int height = OpusWin95ToolbarHeight();
+    ShowWindow(vhwndWin95Toolbar,
+               height > 0 ? SW_SHOWNOACTIVATE : SW_HIDE);
     MoveWindow(vhwndWin95Toolbar, 0, 0, client.right - client.left,
-               OpusWin95ToolbarHeight(), TRUE);
+               height, TRUE);
 }
 
 extern "C" int OpusCreateWin95Chrome(HWND parent) {
     if (OpusWin95ChromeActive()) {
         return TRUE;
     }
-    if (!register_toolbar_class()) {
+    if (!register_toolbar_class() || !register_ruler_overlay_class()) {
         return FALSE;
     }
     if (g_menu_brush == nullptr) {
@@ -983,8 +2297,34 @@ extern "C" int OpusCreateWin95Chrome(HWND parent) {
     if (vhwndWin95Toolbar == nullptr) {
         return FALSE;
     }
+    if (!subclass_app_window(parent)) {
+        DestroyWindow(vhwndWin95Toolbar);
+        vhwndWin95Toolbar = nullptr;
+        return FALSE;
+    }
+    subclass_all_document_panes(parent);
     OpusSizeWin95Toolbar(parent);
+    ToolbarState* state = toolbar_state(vhwndWin95Toolbar);
+    if (state != nullptr) {
+        update_toolbar_menu_checks(parent, *state);
+    }
     SetWindowPos(vhwndWin95Toolbar, HWND_TOP, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     return TRUE;
+}
+
+extern "C" void OpusRequestWin95PageView(HWND parent) {
+    HWND pane = nullptr;
+    EnumChildWindows(parent, find_document_pane,
+                     reinterpret_cast<LPARAM>(&pane));
+    if (pane == nullptr) {
+        return;
+    }
+
+    HWND toolbar = FindWindowExW(parent, nullptr, kToolbarClass, nullptr);
+    ToolbarState* state = toolbar_state(toolbar);
+    if (state != nullptr) {
+        state->page_view_start_after = GetTickCount64() + 750;
+        state->startup_page_view_requested = false;
+    }
 }

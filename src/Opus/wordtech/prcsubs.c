@@ -1947,7 +1947,14 @@ int val;
 		break;
 	case 3:
 		/* word quantity */
-		bltbyte(&val, &prl[1], sizeof(int));
+		/*
+		 * A PRL word is part of the on-disk Word binary format and is always
+		 * two bytes wide.  The original Win16 build used a two-byte int, but
+		 * int is four bytes in the native port.  Copying sizeof(int) here
+		 * overruns every three-byte PRL supplied by callers (notably the
+		 * ruler's prlGray scratch buffer while dragging a marker).
+		 */
+		bltbyte(&val, &prl[1], sizeof(short));
 		break;
 		}
 

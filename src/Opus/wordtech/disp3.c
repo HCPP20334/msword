@@ -2132,7 +2132,11 @@ int ww;
 
 /* special case if page is smaller than rcDisp: center the page in the display */
 	if (FSmallPage(ww, &dxw, &dyw) || dxw > 0)
+#ifdef OPUS_X64
+		return max(dxpGrayOutsideSci / 2, (dxw >> 1));
+#else
 		return (dxw >> 1);
+#endif
 
 	if (pwwd->ipgd == ipgdNil)
 		{
@@ -2145,7 +2149,12 @@ int ww;
 	GetXlMargins(&pdod->dop, pgd.pgn & 1,
 			WinMac(vfli.dxsInch, DxsSetDxsInch(DocBaseWw(ww))),
 			&xlLeft, &xlRight);
-	return max(dxwSelBarSci - xlLeft, ((dxw >> 1) - dxpGrayOutsideSci));
+	dxw = max(dxwSelBarSci - xlLeft, ((dxw >> 1) - dxpGrayOutsideSci));
+#ifdef OPUS_X64
+	/* Reserve a narrow gutter for the Word 95 vertical ruler. */
+	dxw = max(dxpGrayOutsideSci / 2, dxw);
+#endif
+	return dxw;
 }
 
 
@@ -2157,7 +2166,13 @@ int ww;
 /* return ye such that if pwwd->yeTop equals ye, then top of main text area is at 
 the top of the display.
 */
+#ifdef OPUS_X64
+	/* The Win95 presentation keeps the physical top edge of the sheet visible
+	   instead of hiding the top margin above the viewport. */
+	return dypGrayOutsideSci;
+#else
 	return (YePage(ww, fTrue/*fTop*/));
+#endif
 }
 
 

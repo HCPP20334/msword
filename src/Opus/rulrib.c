@@ -1480,7 +1480,8 @@ int imk, i, xa, xaOld;
 			prl[0] = sprmTDxaCol;
 			prl[1] = i;
 			prl[2] = i+1;
-			bltb(&xaT, &prl[3], sizeof(int));
+			/* sprmTDxaCol stores a two-byte Word-format distance. */
+			bltb(&xaT, &prl[3], sizeof(short));
 			pprl += 5;
 
 			/* invalidate table caches */
