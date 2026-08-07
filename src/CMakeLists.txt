@@ -977,6 +977,10 @@ add_test(NAME opus_word1_ui_test
     COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1>
 )
 set_tests_properties(opus_word1_ui_test PROPERTIES TIMEOUT 20)
+add_test(NAME opus_word1_clipboard_shortcut_test
+    COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --clipboard
+)
+set_tests_properties(opus_word1_clipboard_shortcut_test PROPERTIES TIMEOUT 20)
 add_test(NAME opus_word1_typing_test
     COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --typing
 )

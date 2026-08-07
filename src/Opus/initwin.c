@@ -2159,9 +2159,14 @@ FInitHandles()
 			vwWinVersion > 0x0299);
 #endif /* OPUS_X64 */
 	for (ilrd = 0; ilrd < ilrdRcdsIcoMax; ilrd++)
-		if ((*rglrdRcdsIco[ilrd].ph = fRes ?
-				LoadIcon(vhInstance, rglrdRcdsIco[ilrd].id+1) :
+		if ((*rglrdRcdsIco[ilrd].ph =
+#ifdef OPUS_X64
+				/* Native executable resource requested for the restored shell. */
+				LoadIcon(vhInstance, MAKEINTRESOURCE(301)))
+#else
+				fRes ? LoadIcon(vhInstance, rglrdRcdsIco[ilrd].id+1) :
 				HLoadRes0(rglrdRcdsIco[ilrd].id))
+#endif
 				== NULL)
 			return fFalse;
 

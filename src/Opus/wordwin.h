@@ -451,8 +451,11 @@ struct DRC {
 /* Key Map Entry */
 typedef struct _kme
 	{
-	int kc : 12;
-	int kt : 3;
+	/* These are encoded fields, not signed arithmetic values.  Modern MSVC
+	   sign-extends the historical plain-int bitfields (ktMacro 6 became -2),
+	   which made every command key fail to dispatch in the 64-bit port. */
+	unsigned kc : 12;
+	unsigned kt : 3;
 	union {
 		int w;		/* generic */
 		BCM bcm;	/* ktMacro */

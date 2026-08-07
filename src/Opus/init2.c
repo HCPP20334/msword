@@ -502,6 +502,15 @@ BOOL fTutorial;
 		AddKeyToKmp(hkmpBase, kcSubscript, bcmSubscript);
 		AddKeyToKmp(hkmpBase, kcSuperscript, bcmSuperscript);
 		AddKeyToKmp(hkmpBase, kcShowAll, bcmShowAll);
+#ifdef OPUS_X64
+		/* Word 95 editing accelerators.  Register them in the original base
+		   keymap so commands retain Word's normal selection/undo legality. */
+		AddKeyToKmp(hkmpBase, KcCtrl('A'), bcmSelectAll);
+		AddKeyToKmp(hkmpBase, KcCtrl('C'), bcmCopy);
+		AddKeyToKmp(hkmpBase, KcCtrl('V'), bcmPaste);
+		AddKeyToKmp(hkmpBase, KcCtrl('X'), bcmCut);
+		AddKeyToKmp(hkmpBase, KcCtrl('Z'), bcmUndo);
+#endif
 		}
 
 	Debug( vdbs.fReportHeap ? 
@@ -1281,8 +1290,10 @@ FCreateSysMenu()
 	HDC hdcBitmap;
 	HBITMAP hbmpOld;
 	HPEN hpenOld;
+	HICON hiconDocument;
 	int dxMenu;
 	int dyMenu;
+	int dyIcon;
 
 	dxMenu = GetSystemMetrics(SM_CXSMICON);
 	dyMenu = GetSystemMetrics(SM_CYMENU);
@@ -1310,12 +1321,26 @@ FCreateSysMenu()
 
 	hbmpOld = SelectObject(hdcBitmap, hbmpSystem);
 	PatBlt(hdcBitmap, 0, 0, dxMenu, dyMenu, WHITENESS);
-	hpenOld = SelectObject(hdcBitmap, GetStockObject(BLACK_PEN));
-	MoveToEx(hdcBitmap, 3, 3, NULL);
-	LineTo(hdcBitmap, dxMenu - 3, dyMenu - 3);
-	MoveToEx(hdcBitmap, dxMenu - 4, 3, NULL);
-	LineTo(hdcBitmap, 2, dyMenu - 3);
-	SelectObject(hdcBitmap, hpenOld);
+	dyIcon = min(dxMenu, dyMenu);
+	hiconDocument = (HICON)LoadImage(vhInstance, MAKEINTRESOURCE(302),
+			IMAGE_ICON, dyIcon, dyIcon, LR_DEFAULTCOLOR);
+	if (hiconDocument != NULL)
+		{
+		DrawIconEx(hdcBitmap, (dxMenu - dyIcon) / 2,
+				(dyMenu - dyIcon) / 2, hiconDocument, dyIcon, dyIcon,
+				0, NULL, DI_NORMAL);
+		DestroyIcon(hiconDocument);
+		}
+	else
+		{
+		/* Keep a recognizable fallback if the product resource is missing. */
+		hpenOld = SelectObject(hdcBitmap, GetStockObject(BLACK_PEN));
+		MoveToEx(hdcBitmap, 3, 3, NULL);
+		LineTo(hdcBitmap, dxMenu - 3, dyMenu - 3);
+		MoveToEx(hdcBitmap, dxMenu - 4, 3, NULL);
+		LineTo(hdcBitmap, 2, dyMenu - 3);
+		SelectObject(hdcBitmap, hpenOld);
+		}
 	SelectObject(hdcBitmap, hbmpOld);
 	DeleteDC(hdcBitmap);
 	vsci.dxpBmpSystem = dxMenu;

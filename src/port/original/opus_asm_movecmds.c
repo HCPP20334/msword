@@ -49,8 +49,8 @@ typedef struct _OPUS_NATIVE_SYT
 
 typedef struct _OPUS_NATIVE_KME
 	{
-	int kc : 12;
-	int kt : 3;
+	unsigned kc : 12;
+	unsigned kt : 3;
 	union {
 		int w;
 		void *pfn;

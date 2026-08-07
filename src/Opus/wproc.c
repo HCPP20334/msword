@@ -1755,6 +1755,18 @@ LONG      lParam;
 				return (LRESULT)OpusGetWin95ZoomPercent(hwnd);
 			case 79:
 				return (LRESULT)selCur.chp.ico;
+			case 80:
+				{
+				extern BOOL FExecKc();
+				return (LRESULT)FExecKc((int)lParam);
+				}
+			case 81:
+				{
+				extern KME * PkmeOfKcInChain();
+				KME *pkme = PkmeOfKcInChain((int)lParam);
+				return (LRESULT)(pkme != 0 && pkme->kt == ktMacro
+						? pkme->bcm : -1);
+				}
 			}
 		return (LRESULT) -1;
 #endif
@@ -2545,7 +2557,11 @@ LInsert:
 
 		/* Get current Ctrl key state; OurGetKeyState cannot be trusted
 			(sez bradch(rp)) */
-		vgrpfKeyBoardState |= (GetKeyState(VK_CONTROL)<0) ? wKbsControlMask : 0;
+		vgrpfKeyBoardState |= (GetKeyState(VK_CONTROL)<0
+#ifdef OPUS_X64
+				|| GetAsyncKeyState(VK_CONTROL)<0
+#endif
+				) ? wKbsControlMask : 0;
 
 		/* FUTURE: cursor keys will be in keymap someday... */
 		/* but because they're not, need to special case preview */
