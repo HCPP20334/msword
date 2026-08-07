@@ -1071,6 +1071,7 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 	int yeLastPage = min(yeHome,
 			pwwd->rcwDisp.ywBottom - dypPage - dypGrayOutsideSci);
 	int yeLimit;
+	int yeNewPage;
 	int dyeRequested;
 	int dyeRemainder;
 	int docScroll;
@@ -1082,11 +1083,11 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 	int ipgdNew;
 #endif
 #ifdef OPUS_X64
-	/* Word 1.x normally swaps its single Page View display as soon as the
-	   current sheet reaches the viewport edge.  Let the sheet instead travel
-	   one full page plus a gray inter-page gap.  The Win95 chrome paints the
-	   adjacent sheet in that space; when it reaches the home position we hand
-	   the live layout to that page. */
+	/* The legacy display engine keeps one editable page live at a time.  Hand
+	   the live layout to an adjacent page at the instant that sheet enters the
+	   viewport, preserving its screen coordinate across the handoff.  Cached
+	   neighboring sheets can then provide the Word 95 continuous-page view
+	   without leaving a visible page blank until it reaches the home point. */
 	if (dye >= 0)
 		{
 		dyeRequested = dye;
@@ -1094,7 +1095,8 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 		/* Repaginate only when the following sheet is about to become visible.
 		   This avoids doing page layout on every ordinary line-scroll. */
 		if (ipgdNew == ipgdNil &&
-				pwwd->yeScroll - dye <= yeLastPage)
+				pwwd->yeScroll - dye <= min(yeHome,
+					pwwd->rcwDisp.ywBottom - dypPage - dypPageGap))
 			{
 			docScroll = PmwdWw(ww)->doc;
 			cpMacScroll = CpMacDocEdit(docScroll);
@@ -1121,7 +1123,8 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 				}
 			}
 		yeLimit = (!fNoNewPage && ipgdNew != ipgdNil) ?
-				yeHome - dypPage - dypPageGap : yeLastPage;
+				min(yeHome, pwwd->rcwDisp.ywBottom -
+					dypPage - dypPageGap) : yeLastPage;
 		if ((ncp & ncpForceYPos) == 0)
 			dye = min(dye, max(0, pwwd->yeScroll - yeLimit));
 		if (dyeHome > 0 && fHome)
@@ -1132,7 +1135,13 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 			if (fNoNewPage)
 				return fTrue;
 			if (ipgdNew != ipgdNil)
-				SetPageDisp(ww, ipgdNew, yeHome, fFalse, fFalse);
+				{
+				yeNewPage = pwwd->yeScroll + dypPage + dypPageGap;
+				SetPageDisp(ww, ipgdNew, yeNewPage, fFalse, fFalse);
+				if (dyeRemainder > 0)
+					FScrollPageDyeHome(ww, dyeRemainder, fFalse, ncp,
+							fFalse);
+				}
 			else
 				Beep();
 			return fTrue;
@@ -1141,7 +1150,9 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 		if (!fNoNewPage && ipgdNew != ipgdNil &&
 				PwwdWw(ww)->yeScroll <= yeLimit)
 			{
-			SetPageDisp(ww, ipgdNew, yeHome, fFalse, fFalse);
+			yeNewPage = PwwdWw(ww)->yeScroll +
+					dypPage + dypPageGap;
+			SetPageDisp(ww, ipgdNew, yeNewPage, fFalse, fFalse);
 			if (dyeRemainder > 0)
 				FScrollPageDyeHome(ww, dyeRemainder, fFalse, ncp,
 						fFalse);
@@ -1153,7 +1164,7 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 		dyeRequested = -dye;
 		ipgdNew = IpgdPrevWw(ww);
 		yeLimit = (!fNoNewPage && ipgdNew != ipgdNil) ?
-				yeHome + dypPage + dypPageGap : yeHome;
+				pwwd->rcwDisp.ywTop + dypPageGap : yeHome;
 		dye = min(-dye, max(0, yeLimit - pwwd->yeScroll));
 		if (dyeHome < 0 && fHome)
 			dye = min(dye, -dyeHome);
@@ -1163,7 +1174,13 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 			if (fNoNewPage)
 				return fTrue;
 			if (ipgdNew != ipgdNil)
-				SetPageDisp(ww, ipgdNew, yeHome, fFalse, fFalse);
+				{
+				yeNewPage = pwwd->yeScroll - dypPage - dypPageGap;
+				SetPageDisp(ww, ipgdNew, yeNewPage, fFalse, fFalse);
+				if (dyeRemainder > 0)
+					FScrollPageDyeHome(ww, -dyeRemainder, fFalse, ncp,
+							fFalse);
+				}
 			else
 				Beep();
 			return fTrue;
@@ -1172,7 +1189,9 @@ FScrollPageDyeHome(ww, dye, fHome, ncp, fNoNewPage)
 		if (!fNoNewPage && ipgdNew != ipgdNil &&
 				PwwdWw(ww)->yeScroll >= yeLimit)
 			{
-			SetPageDisp(ww, ipgdNew, yeHome, fFalse, fFalse);
+			yeNewPage = PwwdWw(ww)->yeScroll -
+					dypPage - dypPageGap;
+			SetPageDisp(ww, ipgdNew, yeNewPage, fFalse, fFalse);
 			if (dyeRemainder > 0)
 				FScrollPageDyeHome(ww, -dyeRemainder, fFalse, ncp,
 						fFalse);
