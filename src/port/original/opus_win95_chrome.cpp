@@ -1582,6 +1582,72 @@ void draw_neighbor_sheet(HDC dc, const RECT& sheet, const RECT& client,
     DeleteObject(border_brush);
 }
 
+void draw_continuous_page_workspace(HWND pane, HDC dc) {
+    int page_left = 0;
+    int page_top = 0;
+    int page_right = 0;
+    int page_bottom = 0;
+    int page_gap = 0;
+    int has_previous = 0;
+    int has_next = 0;
+    if (!OpusGetWin95ContinuousPageMetrics(
+            pane, &page_left, &page_top, &page_right, &page_bottom,
+            &page_gap, &has_previous, &has_next)) {
+        return;
+    }
+
+    RECT client{};
+    GetClientRect(pane, &client);
+    const int page_height = page_bottom - page_top;
+    if (page_right <= page_left || page_height <= 0) {
+        return;
+    }
+
+    /* The original Page View eraser assumes that the page consumes the
+       window width.  In the continuous-page shell that can leave white
+       invalidation bands across the gray inter-page gap.  Restore the
+       workspace after the legacy paint, excluding only real sheets, before
+       drawing cached neighbor pages. */
+    const int saved = SaveDC(dc);
+    IntersectClipRect(dc, client.left, client.top,
+                     client.right, client.bottom);
+    const int page_step = page_height + page_gap;
+    const int offsets[] = {
+        0,
+        has_previous ? -page_step : 0,
+        has_next ? page_step : 0};
+    const int first = has_previous ? 0 : 1;
+    const int last = has_next ? 3 : 2;
+    for (int index = first; index < last; ++index) {
+        const RECT sheet{
+            page_left, page_top + offsets[index],
+            page_right, page_bottom + offsets[index]};
+        ExcludeClipRect(dc, sheet.left, sheet.top,
+                       sheet.right, sheet.bottom);
+    }
+    FillRect(dc, &client, GetSysColorBrush(COLOR_APPWORKSPACE));
+    RestoreDC(dc, saved);
+
+    /* Rebuild the current sheet's shadow after cleaning the surrounding
+       workspace.  Clip the shadow away from the page so it cannot cover
+       document pixels that the legacy formatter just drew. */
+    const RECT current{page_left, page_top, page_right, page_bottom};
+    RECT shadow = current;
+    OffsetRect(&shadow, 3, 3);
+    const int shadow_saved = SaveDC(dc);
+    IntersectClipRect(dc, shadow.left, shadow.top,
+                     shadow.right, shadow.bottom);
+    ExcludeClipRect(dc, current.left, current.top,
+                    current.right, current.bottom);
+    HBRUSH shadow_brush = CreateSolidBrush(RGB(96, 96, 96));
+    FillRect(dc, &shadow, shadow_brush);
+    DeleteObject(shadow_brush);
+    RestoreDC(dc, shadow_saved);
+    HBRUSH border_brush = CreateSolidBrush(RGB(96, 96, 96));
+    FrameRect(dc, &current, border_brush);
+    DeleteObject(border_brush);
+}
+
 void draw_continuous_page_neighbors(HWND pane, HDC dc) {
     int page_left = 0;
     int page_top = 0;
@@ -2404,6 +2470,7 @@ LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
         HDC dc = GetDC(pane);
         if (dc != nullptr) {
             update_current_page_snapshot(pane, dc);
+            draw_continuous_page_workspace(pane, dc);
             draw_continuous_page_neighbors(pane, dc);
             draw_vertical_ruler(pane, dc);
             ReleaseDC(pane, dc);

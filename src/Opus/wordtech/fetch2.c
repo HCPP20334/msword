@@ -980,7 +980,7 @@ const char *sz;
 {
 	int cch;
 	struct FFN *pffn;
-	char rgch[cbFfnLast];
+	char rgch[cbFfnLast] = {0};
 
 	pffn = (struct FFN *)rgch;
 	if (sz == NULL || *sz == '\0')
@@ -997,6 +997,32 @@ const char *sz;
 	if (cch == 0)
 		return wNinch;
 	return FtcValidateFont(pffn);
+}
+
+/* Variant used while a DOCX is being opened.  The new document has not yet
+   become selCur.doc, so the normal ribbon adapter would add the font to the
+   document that was active before File Open. */
+EXPORT int OpusX64FtcFromFontNameForDoc(doc, sz)
+int doc;
+const char *sz;
+{
+	if (sz == NULL || *sz == '\0')
+		return wNinch;
+	/* Word 1.x keeps only three guaranteed GDI font slots in a new plain-text
+	   document: Times, Symbol, and Helvetica.  Adding Office-era fonts before
+	   the imported document becomes current can alias the new ftc to Symbol.
+	   Preserve the requested family safely; Helvetica is the closest available
+	   substitute for Aptos/Calibri/Arial and retains ANSI character mapping. */
+	if (!FNeNcSz(sz, "Symbol") || !FNeNcSz(sz, "Wingdings"))
+		return 1;
+	if (!FNeNcSz(sz, "Times New Roman") || !FNeNcSz(sz, "Times") ||
+			!FNeNcSz(sz, "Georgia") || !FNeNcSz(sz, "Garamond") ||
+			!FNeNcSz(sz, "Cambria"))
+		return ftcDefault;
+	if (!FNeNcSz(sz, "Courier") || !FNeNcSz(sz, "Courier New") ||
+			!FNeNcSz(sz, "Consolas"))
+		return FtcFromDocIbst(doc, ibstCourier);
+	return 2;
 }
 
 EXPORT int OpusX64HpsFromFontSize(sz)

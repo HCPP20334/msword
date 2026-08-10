@@ -50,7 +50,9 @@ extern RRF	     rrf;
 extern struct WWD ** hwwdCur;
 extern struct MWD ** hmwdCur;
 extern struct SEL    selCur;
+extern struct CHP    vchpFetch;
 extern struct CHP	vchpGraySelCur;
+extern struct PAP	vpapFetch;
 extern struct PAP	vpapSelCur;
 extern struct PAP	vpapGraySelCur;
 extern struct SCI    vsci;
@@ -106,17 +108,17 @@ static int vWin95BaseDysInch = 0;
 int OpusExportCurrentDocumentPdf()
 {
 	int doc;
-	HANDLE hText;
-	LPCH lpch;
 	int result;
-	int cchText = 0;
-	int fAfterReturn = fFalse;
-	CP cp;
+	CP cpPara;
 	CP cpMac;
+	struct DOD *pdod;
 	extern int vccpFetch;
 	extern CHAR HUGE *vhpchFetch;
-	extern int N_FetchCp();
-	extern int OpusExportTextToPdfDialog();
+	extern int OpusPdfSnapshotBegin();
+	extern int OpusPdfSnapshotAddParagraph();
+	extern int OpusPdfSnapshotAddRun();
+	extern int OpusPdfSnapshotExportDialog();
+	extern void OpusX64FontNameFromFtc();
 
 	if (selCur.doc == docNil)
 		return fFalse;
@@ -124,61 +126,78 @@ int OpusExportCurrentDocumentPdf()
 	cpMac = CpMacDocEdit(doc);
 	if (cpMac < cp0 || cpMac > 0x3fffffffL)
 		return fFalse;
-	hText = GlobalAlloc(GMEM_MOVEABLE, (DWORD)(cpMac * 2L + 1L));
-	if (hText == hNil || (lpch = GlobalLockClip(hText)) == NULL)
-		{
-		if (hText != hNil)
-			GlobalFree(hText);
+	pdod = PdodMother(doc);
+	if (!OpusPdfSnapshotBegin(pdod->dop.xaPage, pdod->dop.yaPage,
+			pdod->dop.dxaLeft, pdod->dop.dxaRight,
+			pdod->dop.dyaTop < 0 ? -pdod->dop.dyaTop : pdod->dop.dyaTop,
+			pdod->dop.dyaBottom < 0 ? -pdod->dop.dyaBottom : pdod->dop.dyaBottom))
 		return fFalse;
-		}
 
-	for (cp = cp0; cp < cpMac; )
+	for (cpPara = cp0; cpPara < cpMac; )
 		{
-		int ich;
-		int cch;
-		FetchCp(doc, cp, fcmChars);
-		if (vccpFetch <= 0 || vhpchFetch == NULL)
-			{
-			GlobalUnlock(hText);
-			GlobalFree(hText);
+		CP cpParaLim;
+		CP cpRun;
+		CachePara(doc, cpPara);
+		cpParaLim = CpMin(caPara.cpLim, cpMac);
+		if (cpParaLim <= cpPara)
+			cpParaLim = cpPara + 1;
+		if (!OpusPdfSnapshotAddParagraph(vpapFetch.jc,
+				vpapFetch.dxaLeft, vpapFetch.dxaRight,
+				vpapFetch.dxaLeft1, vpapFetch.dyaBefore,
+				vpapFetch.dyaAfter, vpapFetch.dyaLine,
+				vpapFetch.fKeep, vpapFetch.fKeepFollow,
+				vpapFetch.fPageBreakBefore,
+				vpapFetch.brcBottom != 0))
 			return fFalse;
-			}
-		cch = (int)CpMin((CP)vccpFetch, cpMac - cp);
-		for (ich = 0; ich < cch; ++ich)
+
+		for (cpRun = cpPara; cpRun < cpParaLim; )
 			{
-			int ch = (unsigned char)vhpchFetch[ich];
-			if (ch == chReturn)
+			int ich;
+			int cch;
+			int cchOutput;
+			char rgch[1024];
+			char szFont[LF_FACESIZE];
+			FetchCp(doc, cpRun, fcmChars + fcmProps);
+			if (vccpFetch <= 0 || vhpchFetch == NULL)
+				return fFalse;
+			cch = (int)CpMin((CP)vccpFetch, cpParaLim - cpRun);
+			cch = min(cch, sizeof(rgch) - 1);
+			cchOutput = 0;
+			for (ich = 0; ich < cch; ++ich)
 				{
-				lpch[cchText++] = '\r';
-				lpch[cchText++] = '\n';
-				fAfterReturn = fTrue;
-				}
-			else if (ch == chEop)
-				{
-				if (!fAfterReturn)
-					{
-					lpch[cchText++] = '\r';
-					lpch[cchText++] = '\n';
-					}
-				fAfterReturn = fFalse;
-				}
-			else
-				{
-				fAfterReturn = fFalse;
+				int ch = (unsigned char)vhpchFetch[ich];
+				if (ch == chReturn || ch == chEop)
+					continue;
 				if (ch == chTable || ch == chTab)
-					lpch[cchText++] = '\t';
+					rgch[cchOutput++] = '\t';
 				else if (ch == chSect || ch == chColumnBreak)
-					lpch[cchText++] = '\f';
-				else if (ch >= chSpace || ch == chNonReqHyphen)
-					lpch[cchText++] = (char)ch;
+					rgch[cchOutput++] = '\f';
+				else if (ch == chNonReqHyphen)
+					rgch[cchOutput++] = '-';
+				/* fSpec can cover imported field/list runs whose bytes are still
+				   ordinary visible text.  Filter actual control codes above, not
+				   the whole run, or leading words disappear from PDF output. */
+				else if (ch >= chSpace)
+					rgch[cchOutput++] = (char)ch;
 				}
+			if (cchOutput > 0)
+				{
+				rgch[cchOutput] = '\0';
+				OpusX64FontNameFromFtc(vchpFetch.ftc,
+						szFont, sizeof(szFont));
+				if (!OpusPdfSnapshotAddRun(rgch, cchOutput, szFont,
+						vchpFetch.hps, vchpFetch.fBold,
+						vchpFetch.fItalic, vchpFetch.kul != kulNone,
+						vchpFetch.fStrike, vchpFetch.fSmallCaps,
+						vchpFetch.fCaps, vchpFetch.fVanish,
+						vchpFetch.ico))
+					return fFalse;
+				}
+			cpRun += cch;
 			}
-		cp += cch;
+		cpPara = cpParaLim;
 		}
-	lpch[cchText] = '\0';
-	result = OpusExportTextToPdfDialog(vhwndApp, lpch, cchText);
-	GlobalUnlock(hText);
-	GlobalFree(hText);
+	result = OpusPdfSnapshotExportDialog(vhwndApp);
 	return result;
 }
 

@@ -34,6 +34,7 @@ DEBUGASSERTSZ            /* WIN - bogus macro for assert string */
 #include "dlbenum.h"
 #include "error.h"
 #include "prompt.h"
+#include "border.h"
 
 #ifdef DEBUG
 #ifdef PCJ
@@ -85,6 +86,13 @@ extern KMP ** hkmpCur;
 extern KMP ** vhkmpUser;
 #ifdef OPUS_X64
 extern int OpusWin95OpenAliasIsDocx();
+extern int OpusModernPendingDocxRunCount();
+extern int OpusModernPendingDocxParagraphCount();
+extern int OpusModernGetPendingDocxRun();
+extern int OpusModernGetPendingDocxParagraph();
+extern int OpusModernGetPendingDocxPage();
+extern void OpusModernClearPendingDocxFormatting();
+extern int OpusX64FtcFromFontNameForDoc();
 #endif
 
 struct DTTM DttmCur();
@@ -92,6 +100,133 @@ struct DTTM DttmCur();
 
 static csconst char rgchRTF[] = {
 	'{', '\\','r','t','f'};
+
+
+#ifdef OPUS_X64
+/* Apply the OOXML properties recorded while the temporary plain-text file was
+   created.  Importing the generated RTF through the 16-bit-era parser is not
+   reliable on x64, but the normal Word property engine is: this keeps the
+   stable text-file open path and restores formatting to the resulting doc. */
+static int CbAppendDocxPrl(grpprl, cb, cbMax, sprm, val)
+char *grpprl;
+int cb, cbMax, sprm, val;
+{
+	int cch;
+	if (cb > cbMax - 3)
+		return cb;
+	cch = CchPrlFromSprmVal(grpprl + cb, sprm, val);
+	return cch == valNil ? cb : cb + cch;
+}
+
+
+static void ApplyPendingDocxFormatting(doc)
+int doc;
+{
+	int i, c, cb, ftc;
+	long cpFirst, cpLim;
+	CP cpMac;
+	struct CA ca;
+	char grpprl[96];
+	char szFont[LF_FACESIZE];
+	int bold, italic, underline, strike, smallCaps, allCaps, hidden;
+	int hps, ico;
+	int jc, dxaLeft, dxaRight, dxaLeft1, dyaBefore, dyaAfter, dyaLine;
+	int fKeep, fKeepFollow, fPageBreakBefore, fBottomBorder;
+	int xaPage, yaPage, dxaLeftPage, dxaRightPage, dyaTopPage, dyaBottomPage;
+	struct DOD *pdod;
+
+	cpMac = CpMacDocEdit(doc);
+	if (OpusModernGetPendingDocxPage(&xaPage, &yaPage, &dxaLeftPage,
+			&dxaRightPage, &dyaTopPage, &dyaBottomPage))
+		{
+		pdod = PdodDoc(doc);
+		pdod->dop.xaPage = xaPage;
+		pdod->dop.yaPage = yaPage;
+		pdod->dop.dxaLeft = dxaLeftPage;
+		pdod->dop.dxaRight = dxaRightPage;
+		pdod->dop.dyaTop = dyaTopPage;
+		pdod->dop.dyaBottom = dyaBottomPage;
+		pdod->fEnvDirty = fTrue;
+		pdod->fLRDirty = fTrue;
+		InvalPageView(doc);
+		InvalDoc(doc);
+		InvalFli();
+		}
+	c = OpusModernPendingDocxParagraphCount();
+	for (i = 0; i < c; ++i)
+		{
+		if (!OpusModernGetPendingDocxParagraph(i, &cpFirst, &cpLim,
+				&jc, &dxaLeft, &dxaRight, &dxaLeft1, &dyaBefore,
+				&dyaAfter, &dyaLine, &fKeep, &fKeepFollow,
+				&fPageBreakBefore, &fBottomBorder))
+			continue;
+		if (cpFirst < cp0 || cpFirst > cpMac)
+			continue;
+		if (cpLim > cpMac)
+			cpLim = cpMac;
+		if (cpLim <= cpFirst)
+			cpLim = min(cpMac, cpFirst + ccpEop);
+		if (cpLim <= cpFirst)
+			continue;
+		cb = 0;
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmPJc, jc);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmPDxaLeft, dxaLeft);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmPDxaRight, dxaRight);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmPDxaLeft1, dxaLeft1);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmPDyaBefore, dyaBefore);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmPDyaAfter, dyaAfter);
+		if (dyaLine != 0)
+			cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmPDyaLine, dyaLine);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmPFKeep, fKeep);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmPFKeepFollow, fKeepFollow);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl),
+				sprmPFPageBreakBefore, fPageBreakBefore);
+		if (fBottomBorder)
+			cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl),
+					sprmPBrcBottom, brcSingle | (dptBrcSpace << shiftDxpSpaceBrc));
+		ca.doc = doc;
+		ca.cpFirst = cpFirst;
+		ca.cpLim = cpLim;
+		ApplyGrpprlCa(grpprl, cb, &ca);
+		}
+
+	c = OpusModernPendingDocxRunCount();
+	for (i = 0; i < c; ++i)
+		{
+		if (!OpusModernGetPendingDocxRun(i, &cpFirst, &cpLim, &bold,
+				&italic, &underline, &strike, &smallCaps, &allCaps,
+				&hidden, &hps, &ico, szFont, sizeof(szFont)))
+			continue;
+		if (cpFirst < cp0 || cpFirst >= cpMac)
+			continue;
+		if (cpLim > cpMac)
+			cpLim = cpMac;
+		if (cpLim <= cpFirst)
+			continue;
+		cb = 0;
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCFBold, bold);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCFItalic, italic);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCKul,
+				underline ? kulSingle : kulNone);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCFStrike, strike);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCFSmallCaps, smallCaps);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCFCaps, allCaps);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCFVanish, hidden);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCHps, hps);
+		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCIco, ico);
+		ftc = OpusX64FtcFromFontNameForDoc(doc, szFont);
+		if (ftc >= 0)
+			cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCFtc, ftc);
+		ca.doc = doc;
+		ca.cpFirst = cpFirst;
+		ca.cpLim = cpLim;
+		ApplyGrpprlCa(grpprl, cb, &ca);
+		}
+
+	PdodDoc(doc)->fFormatted = fTrue;
+	OpusModernClearPendingDocxFormatting();
+}
+#endif
 
 
 /*  used to convert between versions of the fib */
@@ -529,10 +664,16 @@ LConvert:
 
 	case dffOpenText:
 		if ((doc = DocReadPlainFn (fn)) != docNil)
+			{
 			if (dff == dffOpenText)
 				PfcbFn(fn)->fForeignFormat = fFalse;
 			else
 				PdodDoc(doc)->fn = fnT;
+#ifdef OPUS_X64
+			if (OpusWin95OpenAliasIsDocx(PfcbFn(fn)->stFile))
+				ApplyPendingDocxFormatting(doc);
+#endif
+			}
 		break;
 
 	default:

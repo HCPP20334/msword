@@ -4,7 +4,9 @@
 #include <array>
 #include <cstring>
 #include <cwchar>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -569,6 +571,62 @@ bool window_is_responsive(const HANDLE process, const HWND window) {
                                2000, &message_result) != 0;
 }
 
+bool capture_window_bmp(const HWND window, const wchar_t* path) {
+    RECT bounds{};
+    if (window == nullptr || path == nullptr || !GetWindowRect(window, &bounds))
+        return false;
+    const int width = bounds.right - bounds.left;
+    const int height = bounds.bottom - bounds.top;
+    if (width <= 0 || height <= 0) return false;
+    HDC screen = GetDC(nullptr);
+    HDC memory = screen != nullptr ? CreateCompatibleDC(screen) : nullptr;
+    HBITMAP bitmap = memory != nullptr ?
+        CreateCompatibleBitmap(screen, width, height) : nullptr;
+    HGDIOBJ previous = bitmap != nullptr ? SelectObject(memory, bitmap) : nullptr;
+    const bool copied = bitmap != nullptr &&
+        BitBlt(memory, 0, 0, width, height, screen, bounds.left, bounds.top,
+               SRCCOPY | CAPTUREBLT) != FALSE;
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    std::vector<unsigned char> pixels(
+        static_cast<std::size_t>(width) * height * 4);
+    const bool read = copied && GetDIBits(
+        memory, bitmap, 0, height, pixels.data(), &info, DIB_RGB_COLORS) != 0;
+    bool written = false;
+    if (read) {
+        BITMAPFILEHEADER file_header{};
+        file_header.bfType = 0x4d42;
+        file_header.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+        file_header.bfSize = file_header.bfOffBits +
+            static_cast<DWORD>(pixels.size());
+        HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            DWORD count = 0;
+            written = WriteFile(file, &file_header, sizeof(file_header),
+                                &count, nullptr) &&
+                      count == sizeof(file_header) &&
+                      WriteFile(file, &info.bmiHeader,
+                                sizeof(info.bmiHeader), &count, nullptr) &&
+                      count == sizeof(info.bmiHeader) &&
+                      WriteFile(file, pixels.data(),
+                                static_cast<DWORD>(pixels.size()), &count,
+                                nullptr) && count == pixels.size();
+            CloseHandle(file);
+        }
+    }
+    if (previous != nullptr) SelectObject(memory, previous);
+    if (bitmap != nullptr) DeleteObject(bitmap);
+    if (memory != nullptr) DeleteDC(memory);
+    if (screen != nullptr) ReleaseDC(nullptr, screen);
+    return written;
+}
+
 int fail(PROCESS_INFORMATION& process, const int code,
          const char* message) {
     std::cerr << message << '\n';
@@ -596,7 +654,8 @@ int wmain(const int argument_count, wchar_t** arguments) {
             "usage: opus_word1_ui_test WORD1.exe "
             "[--typing|--interaction|--selection|--caret|--formatting|--color|"
             "--font-typing|--clipboard|--about|--save-as|--pdf-export|"
-            "--docx-open FILE]\n";
+            "--docx-open FILE|--docx-format-open FILE|"
+            "--docx-pdf-export FILE]\n";
         return 1;
     }
     const bool typing_mode =
@@ -631,9 +690,17 @@ int wmain(const int argument_count, wchar_t** arguments) {
     const bool pdf_export_mode =
         argument_count == 3 &&
         std::wcscmp(arguments[2], L"--pdf-export") == 0;
+    const bool docx_pdf_export_mode =
+        argument_count == 4 &&
+        std::wcscmp(arguments[2], L"--docx-pdf-export") == 0;
+    const bool formatted_docx_open_mode =
+        argument_count == 4 &&
+        (std::wcscmp(arguments[2], L"--docx-format-open") == 0 ||
+         docx_pdf_export_mode);
     const bool docx_open_mode =
         argument_count == 4 &&
-        std::wcscmp(arguments[2], L"--docx-open") == 0;
+        (std::wcscmp(arguments[2], L"--docx-open") == 0 ||
+         formatted_docx_open_mode);
     if (argument_count == 3 && !typing_mode && !interaction_mode &&
         !selection_mode && !caret_mode && !formatting_mode && !color_mode &&
         !font_typing_mode && !clipboard_mode && !about_mode &&
@@ -648,6 +715,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
 
     std::string docx_path;
     std::string pdf_path;
+    bool keep_pdf = false;
     if (docx_open_mode) {
         const int path_size = WideCharToMultiByte(
             CP_ACP, 0, arguments[3], -1, nullptr, 0, nullptr, nullptr);
@@ -668,7 +736,18 @@ int wmain(const int argument_count, wchar_t** arguments) {
         SetEnvironmentVariableA("WORD1_TEST_FILE_DIALOG_PATH",
                                 docx_path.c_str());
     }
-    if (pdf_export_mode) {
+    if (pdf_export_mode || docx_pdf_export_mode) {
+        char requested_pdf[32768]{};
+        const DWORD requested_length = GetEnvironmentVariableA(
+            "WORD1_TEST_KEEP_PDF", requested_pdf,
+            static_cast<DWORD>(std::size(requested_pdf)));
+        keep_pdf = requested_length > 0 &&
+            requested_length < std::size(requested_pdf);
+        if (keep_pdf) {
+            pdf_path = requested_pdf;
+            DeleteFileA(pdf_path.c_str());
+            SetEnvironmentVariableA("WORD1_TEST_PDF_PATH", pdf_path.c_str());
+        } else {
         char temporary_directory[MAX_PATH]{};
         char temporary_seed[MAX_PATH]{};
         if (GetTempPathA(static_cast<DWORD>(std::size(temporary_directory)),
@@ -681,6 +760,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
         DeleteFileA(temporary_seed);
         pdf_path = std::string(temporary_seed) + ".pdf";
         SetEnvironmentVariableA("WORD1_TEST_PDF_PATH", pdf_path.c_str());
+        }
     }
 
     std::wstring command_line = L"\"" + std::wstring(arguments[1]) + L"\"";
@@ -733,7 +813,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
                       << (pane != nullptr ? SendMessageW(
                               pane, kWmOpusX64QuerySelection, 41, 0) : 0)
                       << '\n';
-            DeleteFileA(pdf_path.c_str());
+            if (!keep_pdf) DeleteFileA(pdf_path.c_str());
             return fail(process, 85,
                         "PDF export test could not prepare its document");
         }
@@ -761,7 +841,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
         WaitForSingleObject(process.hProcess, 2000);
         CloseHandle(process.hThread);
         CloseHandle(process.hProcess);
-        DeleteFileA(pdf_path.c_str());
+        if (!keep_pdf) DeleteFileA(pdf_path.c_str());
         if (!pdf_written) {
             std::cerr << "PDF export failed or crashed: exit=0x" << std::hex
                       << exit_code << std::dec << '\n';
@@ -845,16 +925,87 @@ int wmain(const int argument_count, wchar_t** arguments) {
             SendMessageW(pane, kWmOpusX64QuerySelection, 41, 0) : 0;
         const LRESULT displayed_lines = pane != nullptr ?
             SendMessageW(pane, kWmOpusX64QuerySelection, 30, 0) : 0;
+        const LRESULT title_hps = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 52, 0) : -1;
+        const LRESULT title_bold = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 87, 0) : -1;
+        const LRESULT title_color = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 90, 0) : -1;
+        const LRESULT title_alignment = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 91, 0) : -1;
+        const LRESULT page_width = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 97, 0) : -1;
+        const LRESULT page_height = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 98, 0) : -1;
+        const LRESULT left_margin = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 99, 0) : -1;
+        const LRESULT top_margin = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 101, 0) : -1;
+        const LRESULT body_font_index = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 103, 20) : -1;
+        const LRESULT body_font_charset = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 104, 20) : -1;
+        wchar_t capture_path[32768]{};
+        const DWORD capture_length = GetEnvironmentVariableW(
+            L"WORD1_TEST_CAPTURE_PATH", capture_path,
+            static_cast<DWORD>(std::size(capture_path)));
+        if (capture_length > 0 && capture_length < std::size(capture_path)) {
+            ShowWindow(main_window, SW_RESTORE);
+            SetForegroundWindow(main_window);
+            UpdateWindow(main_window);
+            Sleep(2000);
+            if (!capture_window_bmp(main_window, capture_path)) {
+                return fail(process, 84, "DOCX capture failed");
+            }
+        }
+        bool rich_pdf_valid = !docx_pdf_export_mode;
+        if (docx_pdf_export_mode &&
+            PostMessageW(main_window, kWmCommand, kExportPdf, 0)) {
+            const ULONGLONG pdf_deadline = GetTickCount64() + 15000;
+            do {
+                std::ifstream input(pdf_path, std::ios::binary);
+                if (input) {
+                    const std::string pdf_data(
+                        std::istreambuf_iterator<char>(input), {});
+                    rich_pdf_valid = pdf_data.starts_with("%PDF-") &&
+                        pdf_data.find("JUSTIN MARSHALL") != std::string::npos &&
+                        pdf_data.find("/Helvetica-Bold") != std::string::npos &&
+                        pdf_data.find("0 0 1 rg") != std::string::npos &&
+                        pdf_data.find("/MediaBox [0 0 612 792]") !=
+                            std::string::npos;
+                }
+                if (!rich_pdf_valid) Sleep(100);
+            } while (!rich_pdf_valid && GetTickCount64() < pdf_deadline &&
+                     WaitForSingleObject(process.hProcess, 0) != WAIT_OBJECT_0);
+        }
         TerminateProcess(process.hProcess, 0);
         WaitForSingleObject(process.hProcess, 2000);
         CloseHandle(process.hThread);
         CloseHandle(process.hProcess);
         if (!reopened || pane == nullptr || imported_length < 100 ||
-            displayed_lines < 1) {
+            displayed_lines < 1 ||
+            (formatted_docx_open_mode &&
+             (title_hps < 40 || title_bold != 1 || title_color != 2 ||
+              title_alignment != 1 || page_width != 12240 ||
+              page_height != 15840 || left_margin != 835 ||
+              top_margin != 691 || body_font_index != 2 ||
+              body_font_charset != ANSI_CHARSET)) || !rich_pdf_valid) {
             std::cerr << "DOCX open state: length=" << imported_length
-                      << " displayedLines=" << displayed_lines << '\n';
+                      << " displayedLines=" << displayed_lines
+                      << " title={hps:" << title_hps
+                      << ",bold:" << title_bold
+                      << ",color:" << title_color
+                      << ",alignment:" << title_alignment << "}"
+                      << " page={" << page_width << "x" << page_height
+                      << ",left:" << left_margin << ",top:" << top_margin
+                      << "} bodyFont={index:" << body_font_index
+                      << ",charset:" << body_font_charset << "}\n";
+            if (docx_pdf_export_mode)
+                std::cerr << "richPdf=" << rich_pdf_valid << '\n';
+            if (!keep_pdf && !pdf_path.empty()) DeleteFileA(pdf_path.c_str());
             return 84;
         }
+        if (!keep_pdf && !pdf_path.empty()) DeleteFileA(pdf_path.c_str());
         return 0;
     }
     if (about_mode) {

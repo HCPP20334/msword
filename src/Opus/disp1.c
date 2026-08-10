@@ -517,9 +517,28 @@ LSplat2:
 			rcw.ywBottom = max(rcw.ywTop, rcw.ywBottom - dyFrameLine);
 		}
 
+	#ifdef OPUS_X64
+		{
+		int iPageClip = 0;
+		/* The native continuous-page shell keeps rcePage in client pixel
+		   coordinates.  Some legacy opaque-line erases widen their rectangle
+		   after ClipRectFromDr, which can otherwise paint white bands into the
+		   gray workspace.  A real DC clip is the final safety boundary. */
+		if (pwwd->fPageView && (iPageClip = SaveDC(hdc)) != 0)
+			IntersectClipRect(hdc, pwwd->rcePage.xeLeft,
+					pwwd->rcePage.yeTop, pwwd->rcePage.xeRight,
+					pwwd->rcePage.yeBottom);
+		DisplayFliCore(ww, rcw,
+				dxpToXw + /* aesthetic fudge */ (fWin ? 0 : vsci.dxpBorder),
+				rcwErase.ywBottom);
+		if (iPageClip != 0)
+			RestoreDC(hdc, iPageClip);
+		}
+	#else
 	DisplayFliCore(ww, rcw,
 			dxpToXw + /* aesthetic fudge */ (fWin ? 0 : vsci.dxpBorder),
 			rcwErase.ywBottom);
+	#endif
 
      /* edl may have changed in drawing picture in displayflicore. Update. */ 
 	GetPlc(hplcedl, dl, &edl);

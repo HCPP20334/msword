@@ -95,6 +95,7 @@ struct CA       caTable;
 extern struct FTI vfti;
 extern char             (**vhgrpchr)[];
 extern int              vbchrMac;
+extern struct STTB      **vhsttbFont;
 #endif
 extern struct FCB     **mpfnhfcb[];
 extern int 		      vfnPreload;
@@ -1766,6 +1767,67 @@ LONG      lParam;
 				KME *pkme = PkmeOfKcInChain((int)lParam);
 				return (LRESULT)(pkme != 0 && pkme->kt == ktMacro
 						? pkme->bcm : -1);
+				}
+			case 87:
+			case 88:
+			case 89:
+			case 90:
+				{
+				CP cp = (CP)lParam;
+				if (cp < cp0 || cp >= CpMacDocEdit(selCur.doc))
+					return (LRESULT)-1;
+				FetchCp(selCur.doc, cp, fcmProps);
+				if (LOWORD(wParam) == 87) return (LRESULT)(vchpFetch.fBold != 0);
+				if (LOWORD(wParam) == 88) return (LRESULT)(vchpFetch.fItalic != 0);
+				if (LOWORD(wParam) == 89) return (LRESULT)vchpFetch.kul;
+				return (LRESULT)vchpFetch.ico;
+				}
+			case 91:
+			case 92:
+			case 93:
+			case 94:
+			case 95:
+			case 96:
+				{
+				CP cp = (CP)lParam;
+				if (cp < cp0 || cp >= CpMacDocEdit(selCur.doc))
+					return (LRESULT)-1;
+				CachePara(selCur.doc, cp);
+				if (LOWORD(wParam) == 91) return (LRESULT)vpapFetch.jc;
+				if (LOWORD(wParam) == 92) return (LRESULT)vpapFetch.dxaLeft;
+				if (LOWORD(wParam) == 93) return (LRESULT)vpapFetch.dyaBefore;
+				if (LOWORD(wParam) == 94) return (LRESULT)vpapFetch.dyaAfter;
+				if (LOWORD(wParam) == 95) return (LRESULT)vpapFetch.brcBottom;
+				return (LRESULT)(vpapFetch.fKeepFollow != 0);
+				}
+			case 97:
+				return (LRESULT)PdodMother(selCur.doc)->dop.xaPage;
+			case 98:
+				return (LRESULT)PdodMother(selCur.doc)->dop.yaPage;
+			case 99:
+				return (LRESULT)PdodMother(selCur.doc)->dop.dxaLeft;
+			case 100:
+				return (LRESULT)PdodMother(selCur.doc)->dop.dxaRight;
+			case 101:
+				return (LRESULT)PdodMother(selCur.doc)->dop.dyaTop;
+			case 102:
+				return (LRESULT)PdodMother(selCur.doc)->dop.dyaBottom;
+			case 103:
+			case 104:
+				{
+				int ibst;
+				struct FFN *pffn;
+				CP cp = (CP)lParam;
+				if (cp < cp0 || cp >= CpMacDocEdit(selCur.doc))
+					return (LRESULT)-1;
+				FetchCp(selCur.doc, cp, fcmProps);
+				ibst = IbstFontFromFtcDoc(vchpFetch.ftc, selCur.doc);
+				if (LOWORD(wParam) == 103)
+					return (LRESULT)ibst;
+				if (ibst < 0)
+					return (LRESULT)-1;
+				pffn = (struct FFN *)PstFromSttb(vhsttbFont, ibst);
+				return (LRESULT)(unsigned char)ChsPffn(pffn);
 				}
 			}
 		return (LRESULT) -1;
