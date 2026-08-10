@@ -22,6 +22,9 @@ extern HWND vhWndMsgBoxParent;
 void GetCabSz(void**, char*, std::uint16_t, std::uint16_t);
 int FSetCabSz(void**, const char*, std::uint16_t);
 void OpusX64TraceRibbon(const char*, int, int, int, int, long, long, int);
+int OpusModernPathIsDocx(const char*);
+int OpusModernDocxToTextFile(const char*, const char*);
+int OpusModernRtfFileToDocx(const char*, const char*);
 }
 
 /*
@@ -151,7 +154,8 @@ std::string win95_alias_key(std::string path) {
     return path;
 }
 
-bool make_win95_staging_path(std::string& path) {
+bool make_win95_staging_path(std::string& path,
+                             const char* desired_extension = ".DOC") {
     char module_path[32768]{};
     const DWORD module_length = GetModuleFileNameA(
         nullptr, module_path, static_cast<DWORD>(std::size(module_path)));
@@ -174,9 +178,9 @@ bool make_win95_staging_path(std::string& path) {
             return false;
         }
         DeleteFileA(temporary);
-        char* extension = std::strrchr(temporary, '.');
-        if (extension != nullptr) {
-            lstrcpyA(extension, ".DOC");
+        char* existing_extension = std::strrchr(temporary, '.');
+        if (existing_extension != nullptr) {
+            lstrcpyA(existing_extension, desired_extension);
         }
         if (GetFileAttributesA(temporary) == INVALID_FILE_ATTRIBUTES &&
             std::strlen(temporary) < 120) {
@@ -260,6 +264,7 @@ constexpr Tmc kTmcSaveDirectoryList = kTmcUserMin + 3;
 constexpr Tmc kTmcSaveDirectory = kTmcUserMin + 4;
 constexpr Tmc kTmcSaveFormatPrompt = kTmcUserMin + 5;
 constexpr Tmc kTmcSaveFormat = kTmcUserMin + 6;
+constexpr int kSaveFormatRtf = 6;
 constexpr Tmc kTmcSaveQuick = kTmcUserMin + 7;
 constexpr Tmc kTmcSaveBackup = kTmcUserMin + 8;
 constexpr Tmc kTmcSaveLockAnnotations = kTmcUserMin + 9;
@@ -2146,12 +2151,13 @@ Tmc run_word95_common_file_dialog(DialogState& dialog) {
     }
 
     static const char open_filter[] =
-        "Word Documents (*.doc;*.dot)\0*.doc;*.dot\0"
+        "Word Documents (*.doc;*.docx;*.dot)\0*.doc;*.docx;*.dot\0"
         "Rich Text Format (*.rtf)\0*.rtf\0"
         "Text Files (*.txt)\0*.txt\0"
         "All Files (*.*)\0*.*\0\0";
     static const char save_filter[] =
         "Word Documents (*.doc)\0*.doc\0"
+        "Word 2007-2024 Documents (*.docx)\0*.docx\0"
         "Document Templates (*.dot)\0*.dot\0"
         "All Files (*.*)\0*.*\0\0";
 
@@ -2180,8 +2186,23 @@ Tmc run_word95_common_file_dialog(DialogState& dialog) {
                                  OFN_OVERWRITEPROMPT;
         }
 
-        const BOOL accepted = opening ?
-            GetOpenFileNameA(&file_dialog) : GetSaveFileNameA(&file_dialog);
+        char test_path[32768]{};
+        const DWORD test_path_length = GetEnvironmentVariableA(
+            "WORD1_TEST_FILE_DIALOG_PATH", test_path,
+            static_cast<DWORD>(std::size(test_path)));
+        BOOL accepted = FALSE;
+        if (test_path_length > 0 && test_path_length < std::size(test_path)) {
+            lstrcpynA(file_buffer.data(), test_path,
+                      static_cast<int>(file_buffer.size()));
+            if (saving && OpusModernPathIsDocx(test_path)) {
+                file_dialog.nFilterIndex = 2;
+            }
+            SetEnvironmentVariableA("WORD1_TEST_FILE_DIALOG_PATH", nullptr);
+            accepted = TRUE;
+        } else {
+            accepted = opening ? GetOpenFileNameA(&file_dialog) :
+                                 GetSaveFileNameA(&file_dialog);
+        }
         if (!accepted) {
             if (CommDlgExtendedError() != 0) {
                 MessageBoxA(owner,
@@ -2196,18 +2217,41 @@ Tmc run_word95_common_file_dialog(DialogState& dialog) {
             break;
         }
 
-        const std::string selected_path = file_buffer.data();
+        std::string selected_path = file_buffer.data();
+        if (saving && file_dialog.nFilterIndex == 2) {
+            const std::size_t selected_slash =
+                selected_path.find_last_of("\\/");
+            const std::size_t selected_dot = selected_path.find_last_of('.');
+            if (selected_dot == std::string::npos ||
+                (selected_slash != std::string::npos &&
+                 selected_dot < selected_slash)) {
+                selected_path += ".docx";
+            } else if (_stricmp(selected_path.c_str() + selected_dot,
+                                ".doc") == 0) {
+                selected_path.replace(selected_dot, std::string::npos,
+                                      ".docx");
+            }
+        }
         std::string legacy_path;
-        if (!make_win95_staging_path(legacy_path)) {
+        const bool docx = OpusModernPathIsDocx(selected_path.c_str()) != 0;
+        if (!make_win95_staging_path(legacy_path,
+                                     docx ? ".TXT" : ".DOC")) {
             MessageBoxA(owner,
                 "Word could not prepare a temporary document file.",
                 opening ? "Open" : "Save As",
                 MB_OK | MB_ICONEXCLAMATION);
             continue;
         }
-        if (opening &&
-            !CopyFileA(selected_path.c_str(), legacy_path.c_str(), FALSE)) {
-            MessageBoxA(owner, "Word could not open the selected file.",
+        const bool staged_open = !opening ||
+            (docx ?
+                OpusModernDocxToTextFile(selected_path.c_str(),
+                                          legacy_path.c_str()) != 0 :
+                CopyFileA(selected_path.c_str(), legacy_path.c_str(), FALSE) != 0);
+        if (!staged_open) {
+            MessageBoxA(owner,
+                        docx ?
+                            "Word could not read this DOCX document." :
+                            "Word could not open the selected file.",
                         "Open", MB_OK | MB_ICONEXCLAMATION);
             continue;
         }
@@ -2240,6 +2284,11 @@ Tmc run_word95_common_file_dialog(DialogState& dialog) {
                 SetWindowTextA(edit.window, edit.text.c_str());
             }
             sync_save_cab(dialog);
+            if (auto* cab = save_cab(dialog);
+                cab != nullptr && docx) {
+                cab->format = kSaveFormatRtf;
+                cab->quick_save = false;
+            }
         }
 
         if (invoke_dialog_proc(dialog, kDlmTerm, kTmcOk)) {
@@ -2374,10 +2423,13 @@ int OpusFinishWin95SaveAlias(const unsigned char* st_file,
                  g_win95_save_alias.legacy_path.c_str()) == 0) {
         bool copied = success != 0;
         if (copied) {
-            copied = CopyFileA(
-                g_win95_save_alias.legacy_path.c_str(),
-                g_win95_save_alias.selected_path.c_str(),
-                FALSE) != 0;
+            copied = OpusModernPathIsDocx(
+                         g_win95_save_alias.selected_path.c_str()) ?
+                OpusModernRtfFileToDocx(
+                    g_win95_save_alias.legacy_path.c_str(),
+                    g_win95_save_alias.selected_path.c_str()) != 0 :
+                CopyFileA(g_win95_save_alias.legacy_path.c_str(),
+                          g_win95_save_alias.selected_path.c_str(), FALSE) != 0;
         }
         if (!success) {
             DeleteFileA(g_win95_save_alias.legacy_path.c_str());
@@ -2396,7 +2448,28 @@ int OpusFinishWin95SaveAlias(const unsigned char* st_file,
     if (!success) {
         return false;
     }
-    return CopyFileA(path.c_str(), saved->second.c_str(), FALSE) != 0;
+    return OpusModernPathIsDocx(saved->second.c_str()) ?
+        OpusModernRtfFileToDocx(path.c_str(), saved->second.c_str()) != 0 :
+        CopyFileA(path.c_str(), saved->second.c_str(), FALSE) != 0;
+}
+
+int OpusWin95SaveAliasRequiresRtf(const unsigned char* st_file) {
+    const std::string path = counted_path(st_file);
+    if (path.empty()) return false;
+    if (g_win95_save_alias.active &&
+        _stricmp(path.c_str(), g_win95_save_alias.legacy_path.c_str()) == 0)
+        return OpusModernPathIsDocx(g_win95_save_alias.selected_path.c_str());
+    const auto saved = g_win95_saved_aliases.find(win95_alias_key(path));
+    return saved != g_win95_saved_aliases.end() &&
+           OpusModernPathIsDocx(saved->second.c_str());
+}
+
+int OpusWin95OpenAliasIsDocx(const unsigned char* st_file) {
+    const std::string path = counted_path(st_file);
+    if (path.empty()) return false;
+    const auto saved = g_win95_saved_aliases.find(win95_alias_key(path));
+    return saved != g_win95_saved_aliases.end() &&
+           OpusModernPathIsDocx(saved->second.c_str());
 }
 
 struct OpusSdsCompat {

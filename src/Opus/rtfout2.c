@@ -833,7 +833,7 @@ int doc;
 */
 /*  %%Function:  HWriteRTF   %%Owner:  bobz       */
 
-HWriteRTF (doc, cpFirst, cpLim, cbInitial)
+HANDLE HWriteRTF (doc, cpFirst, cpLim, cbInitial)
 int doc;
 CP cpFirst, cpLim;
 int cbInitial;

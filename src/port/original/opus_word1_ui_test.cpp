@@ -2,6 +2,7 @@
 #include <windows.h>
 
 #include <array>
+#include <cstring>
 #include <cwchar>
 #include <iostream>
 #include <string>
@@ -12,10 +13,12 @@ namespace {
 
 constexpr UINT kWmCommand = 0x0111;
 constexpr WPARAM kFileNew = 1813;
+constexpr WPARAM kFileOpen = 1843;
 constexpr WPARAM kFileSaveAs = 1897;
 constexpr WPARAM kFileExit = 2095;
 constexpr WPARAM kHelpAbout = 182;
 constexpr WPARAM kParaCenter = 1355;
+constexpr WPARAM kExportPdf = 0x7103;
 constexpr UINT kWmOpusX64QuerySelection = WM_APP + 0x351;
 constexpr int kKcControl = 0x100;
 constexpr LRESULT kEditUndo = 2229;
@@ -93,6 +96,26 @@ HWND find_descendant_by_class(const HWND parent,
         }
         if (const HWND descendant =
                 find_descendant_by_class(child, expected_class);
+            descendant != nullptr) {
+            return descendant;
+        }
+    }
+    return nullptr;
+}
+
+HWND find_visible_descendant_by_class(const HWND parent,
+                                      const wchar_t* expected_class) {
+    for (HWND child = GetWindow(parent, GW_CHILD); child != nullptr;
+         child = GetWindow(child, GW_HWNDNEXT)) {
+        wchar_t class_name[128] = {};
+        if (GetClassNameW(child, class_name,
+                          static_cast<int>(std::size(class_name))) != 0 &&
+            _wcsicmp(class_name, expected_class) == 0 &&
+            IsWindowVisible(child)) {
+            return child;
+        }
+        if (const HWND descendant =
+                find_visible_descendant_by_class(child, expected_class);
             descendant != nullptr) {
             return descendant;
         }
@@ -568,11 +591,12 @@ int fail(PROCESS_INFORMATION& process, const int code,
 int wmain(const int argument_count, wchar_t** arguments) {
     SetProcessDpiAwarenessContext(
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    if (argument_count < 2 || argument_count > 3) {
+    if (argument_count < 2 || argument_count > 4) {
         std::cerr <<
             "usage: opus_word1_ui_test WORD1.exe "
             "[--typing|--interaction|--selection|--caret|--formatting|--color|"
-            "--font-typing|--clipboard|--about|--save-as]\n";
+            "--font-typing|--clipboard|--about|--save-as|--pdf-export|"
+            "--docx-open FILE]\n";
         return 1;
     }
     const bool typing_mode =
@@ -604,23 +628,78 @@ int wmain(const int argument_count, wchar_t** arguments) {
     const bool save_as_mode =
         argument_count == 3 &&
         std::wcscmp(arguments[2], L"--save-as") == 0;
+    const bool pdf_export_mode =
+        argument_count == 3 &&
+        std::wcscmp(arguments[2], L"--pdf-export") == 0;
+    const bool docx_open_mode =
+        argument_count == 4 &&
+        std::wcscmp(arguments[2], L"--docx-open") == 0;
     if (argument_count == 3 && !typing_mode && !interaction_mode &&
         !selection_mode && !caret_mode && !formatting_mode && !color_mode &&
         !font_typing_mode && !clipboard_mode && !about_mode &&
-        !save_as_mode) {
+        !save_as_mode && !pdf_export_mode) {
         std::cerr << "unknown test mode\n";
         return 1;
+    }
+    if (argument_count == 4 && !docx_open_mode) {
+        std::cerr << "unknown test mode\n";
+        return 1;
+    }
+
+    std::string docx_path;
+    std::string pdf_path;
+    if (docx_open_mode) {
+        const int path_size = WideCharToMultiByte(
+            CP_ACP, 0, arguments[3], -1, nullptr, 0, nullptr, nullptr);
+        if (path_size <= 1) {
+            std::cerr << "DOCX open test received an invalid path\n";
+            return 83;
+        }
+        docx_path.resize(static_cast<std::size_t>(path_size));
+        WideCharToMultiByte(CP_ACP, 0, arguments[3], -1, docx_path.data(),
+                            path_size, nullptr, nullptr);
+        docx_path.pop_back();
+        if (GetFileAttributesA(docx_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            std::cerr << "DOCX open test file does not exist\n";
+            return 83;
+        }
+    }
+    if (docx_open_mode) {
+        SetEnvironmentVariableA("WORD1_TEST_FILE_DIALOG_PATH",
+                                docx_path.c_str());
+    }
+    if (pdf_export_mode) {
+        char temporary_directory[MAX_PATH]{};
+        char temporary_seed[MAX_PATH]{};
+        if (GetTempPathA(static_cast<DWORD>(std::size(temporary_directory)),
+                         temporary_directory) == 0 ||
+            GetTempFileNameA(temporary_directory, "OWP", 0,
+                             temporary_seed) == 0) {
+            std::cerr << "PDF export test could not reserve a path\n";
+            return 85;
+        }
+        DeleteFileA(temporary_seed);
+        pdf_path = std::string(temporary_seed) + ".pdf";
+        SetEnvironmentVariableA("WORD1_TEST_PDF_PATH", pdf_path.c_str());
     }
 
     std::wstring command_line = L"\"" + std::wstring(arguments[1]) + L"\"";
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
+    LPWCH environment = GetEnvironmentStringsW();
     if (!CreateProcessW(arguments[1], command_line.data(), nullptr, nullptr,
-                        FALSE, 0, nullptr, nullptr, &startup, &process)) {
+                        FALSE, CREATE_UNICODE_ENVIRONMENT, environment,
+                        nullptr, &startup, &process)) {
+        if (environment != nullptr) FreeEnvironmentStringsW(environment);
+        SetEnvironmentVariableA("WORD1_TEST_FILE_DIALOG_PATH", nullptr);
+        SetEnvironmentVariableA("WORD1_TEST_PDF_PATH", nullptr);
         std::cerr << "CreateProcessW failed: " << GetLastError() << '\n';
         return 2;
     }
+    if (environment != nullptr) FreeEnvironmentStringsW(environment);
+    SetEnvironmentVariableA("WORD1_TEST_FILE_DIALOG_PATH", nullptr);
+    SetEnvironmentVariableA("WORD1_TEST_PDF_PATH", nullptr);
 
     const HWND main_window = wait_for_window(
         process.hProcess, process.dwProcessId, nullptr,
@@ -628,13 +707,75 @@ int wmain(const int argument_count, wchar_t** arguments) {
     if (main_window == nullptr) {
         return fail(process, 3, "WORD1 main window did not appear");
     }
+    if (pdf_export_mode) {
+        const HWND pane = find_descendant_by_class(main_window, L"OpusWwd");
+        DWORD ignored_process_id = 0;
+        const DWORD thread_id =
+            GetWindowThreadProcessId(main_window, &ignored_process_id);
+        const LRESULT initial_length = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 41, 0) : 0;
+        const bool focused = pane != nullptr &&
+            (make_foreground_and_focus(main_window, pane, thread_id) ||
+             wait_for_focus(process.hProcess, thread_id, pane, 500));
+        bool typed = focused;
+        for (const wchar_t character : std::wstring(L"pdf export text")) {
+            typed = typed && post_keyboard_character(pane, character);
+        }
+        Sleep(750);
+        const bool committed = typed &&
+            SendMessageW(pane, kWmOpusX64QuerySelection, 41, 0) >
+                initial_length;
+        if (!committed ||
+            !PostMessageW(main_window, kWmCommand, kExportPdf, 0)) {
+            std::cerr << "PDF preparation: focused=" << focused
+                      << " typed=" << typed << " committed=" << committed
+                      << " length=" << initial_length << "->"
+                      << (pane != nullptr ? SendMessageW(
+                              pane, kWmOpusX64QuerySelection, 41, 0) : 0)
+                      << '\n';
+            DeleteFileA(pdf_path.c_str());
+            return fail(process, 85,
+                        "PDF export test could not prepare its document");
+        }
+        const ULONGLONG deadline = GetTickCount64() + 15000;
+        bool pdf_written = false;
+        while (!pdf_written && GetTickCount64() < deadline &&
+               WaitForSingleObject(process.hProcess, 0) != WAIT_OBJECT_0) {
+            HANDLE pdf = CreateFileA(pdf_path.c_str(), GENERIC_READ,
+                                     FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                     nullptr, OPEN_EXISTING,
+                                     FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (pdf != INVALID_HANDLE_VALUE) {
+                char header[5]{};
+                DWORD read = 0;
+                pdf_written = ReadFile(pdf, header, sizeof(header), &read,
+                                       nullptr) && read == sizeof(header) &&
+                              std::memcmp(header, "%PDF-", sizeof(header)) == 0;
+                CloseHandle(pdf);
+            }
+            Sleep(100);
+        }
+        DWORD exit_code = STILL_ACTIVE;
+        GetExitCodeProcess(process.hProcess, &exit_code);
+        TerminateProcess(process.hProcess, 0);
+        WaitForSingleObject(process.hProcess, 2000);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        DeleteFileA(pdf_path.c_str());
+        if (!pdf_written) {
+            std::cerr << "PDF export failed or crashed: exit=0x" << std::hex
+                      << exit_code << std::dec << '\n';
+            return 86;
+        }
+        return 0;
+    }
     if (save_as_mode) {
         Sleep(1000);
         if (!PostMessageW(main_window, kWmCommand, kFileSaveAs, 0)) {
             return fail(process, 69, "could not send File Save As");
         }
         const HWND save_as_dialog = wait_for_window(
-            process.hProcess, process.dwProcessId, L"OpusSdmDialog",
+            process.hProcess, process.dwProcessId, L"#32770",
             L"Save As", 5000);
         if (save_as_dialog == nullptr) {
             std::cerr << "Save As stage="
@@ -642,17 +783,32 @@ int wmain(const int argument_count, wchar_t** arguments) {
                              main_window, "OpusX64SaveAsStage"))
                       << '\n';
             log_process_windows(process.dwProcessId);
-            return fail(process, 70, "File Save As dialog did not appear");
+            return fail(process, 70,
+                        "Windows 95 File Save As dialog did not appear");
         }
         if (!control_has_class(save_as_dialog, 2, L"Button") ||
             !window_is_responsive(process.hProcess, save_as_dialog)) {
             return fail(process, 71,
                         "File Save As dialog did not finish initializing");
         }
-        if (!PostMessageW(save_as_dialog, kWmCommand, 2, 0) ||
-            !wait_for_window_to_close(process.hProcess, process.dwProcessId,
-                                      L"OpusSdmDialog", 5000) ||
-            !window_is_responsive(process.hProcess, main_window)) {
+        const bool cancel_posted =
+            PostMessageW(save_as_dialog, kWmCommand, 2, 0) != FALSE;
+        const bool dialog_closed = cancel_posted &&
+            wait_for_window_to_close(process.hProcess, process.dwProcessId,
+                                     L"#32770", 5000) &&
+            wait_for_window_to_close(process.hProcess, process.dwProcessId,
+                                     L"OpusSdmDialog", 5000);
+        const bool app_responsive = dialog_closed &&
+            window_is_responsive(process.hProcess, main_window);
+        if (!cancel_posted || !dialog_closed || !app_responsive) {
+            DWORD exit_code = STILL_ACTIVE;
+            GetExitCodeProcess(process.hProcess, &exit_code);
+            std::cerr << "Save As cancel state: posted=" << cancel_posted
+                      << " closed=" << dialog_closed
+                      << " responsive=" << app_responsive
+                      << " exit=0x" << std::hex << exit_code << std::dec
+                      << '\n';
+            log_process_windows(process.dwProcessId);
             return fail(process, 72,
                         "File Save As dialog did not cancel cleanly");
         }
@@ -660,6 +816,45 @@ int wmain(const int argument_count, wchar_t** arguments) {
         WaitForSingleObject(process.hProcess, 2000);
         CloseHandle(process.hThread);
         CloseHandle(process.hProcess);
+        return 0;
+    }
+    if (docx_open_mode) {
+        HWND pane = find_descendant_by_class(main_window, L"OpusWwd");
+        if (pane == nullptr ||
+            !PostMessageW(main_window, kWmCommand, kFileOpen, 0)) {
+            return fail(process, 78, "DOCX open test could not open its document");
+        }
+        const ULONGLONG open_deadline = GetTickCount64() + 10000;
+        wchar_t document_caption[512]{};
+        do {
+            GetWindowTextW(main_window, document_caption,
+                           static_cast<int>(std::size(document_caption)));
+            if (std::wcsstr(document_caption, L"Document1") == nullptr) {
+                break;
+            }
+            Sleep(100);
+        } while (GetTickCount64() < open_deadline &&
+                 WaitForSingleObject(process.hProcess, 0) != WAIT_OBJECT_0);
+        // The legacy open command updates the caption before it has finished
+        // activating the replacement MDI child and document pane.
+        Sleep(750);
+        pane = find_visible_descendant_by_class(main_window, L"OpusWwd");
+        const bool reopened =
+            std::wcsstr(document_caption, L"Document1") == nullptr;
+        const LRESULT imported_length = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 41, 0) : 0;
+        const LRESULT displayed_lines = pane != nullptr ?
+            SendMessageW(pane, kWmOpusX64QuerySelection, 30, 0) : 0;
+        TerminateProcess(process.hProcess, 0);
+        WaitForSingleObject(process.hProcess, 2000);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        if (!reopened || pane == nullptr || imported_length < 100 ||
+            displayed_lines < 1) {
+            std::cerr << "DOCX open state: length=" << imported_length
+                      << " displayedLines=" << displayed_lines << '\n';
+            return 84;
+        }
         return 0;
     }
     if (about_mode) {

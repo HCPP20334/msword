@@ -83,6 +83,9 @@ extern int vfConversion;
 extern MUD ** vhmudUser;
 extern KMP ** hkmpCur;
 extern KMP ** vhkmpUser;
+#ifdef OPUS_X64
+extern int OpusWin95OpenAliasIsDocx();
+#endif
 
 struct DTTM DttmCur();
 
@@ -484,7 +487,11 @@ CHAR *stConverter, **pstSubset;
 		dff = dffOpenText;
 
 	/* dff is our best guess of format */
-	if (fInput)
+	if (fInput
+#ifdef OPUS_X64
+			&& !OpusWin95OpenAliasIsDocx(PfcbFn(fn)->stFile)
+#endif
+			)
 		/* verify the format */
 		if ((dff = DffVerifyDff (dff, fn)) == dffNil)
 			/* cancel operation */

@@ -89,6 +89,7 @@ DEBUGASSERTSZ            /* WIN - bogus macro for assert string */
 #ifdef OPUS_X64
 extern int OpusWin95SaveAliasMatches();
 extern int OpusFinishWin95SaveAlias();
+extern int OpusWin95SaveAliasRequiresRtf();
 #define FWin95SaveAliasMatches(st) OpusWin95SaveAliasMatches(st)
 #else
 #define FWin95SaveAliasMatches(st) fFalse
@@ -661,7 +662,16 @@ LSaveAs:
 
 	/*  perform the actual save */
 	PdodDoc(doc)->dop.fLockAtn = (*hcab)->fLockAnnot;
-	if (FSaveFile(stFile, doc, DffISaveFmt((*hcab)->iFmt), 
+	{
+	int dffSave = DffISaveFmt((*hcab)->iFmt);
+#ifdef OPUS_X64
+	if (OpusWin95SaveAliasRequiresRtf(stFile))
+		{
+		dffSave = dffSaveRTF;
+		(*hcab)->fQuicksave = fFalse;
+		}
+#endif
+	if (FSaveFile(stFile, doc, dffSave,
 			(*hcab)->fQuicksave, (*hcab)->fBackup, fTrue /* fReport */))
 		{
 		/*  display number of characters written in prompt */
@@ -682,6 +692,7 @@ LSaveAs:
 		cmd = cmdError;
 		StopProgressReport(hNil, pdcRestoreImmed);
 		}
+	}
 
 	vhpprSave = hNil;
 

@@ -35,6 +35,7 @@ extern "C" int OpusGetWin95HorizontalPageMargins(
 extern "C" int OpusAdjustWin95HorizontalMargin(
     HWND ruler, int left_margin, int delta_pixels);
 extern "C" void OpusDrawWin95HorizontalRuler(HWND ruler);
+extern "C" int OpusExportCurrentDocumentPdf(void);
 
 namespace {
 
@@ -54,6 +55,7 @@ constexpr UINT kComboSize = 0x7503;
 constexpr UINT kComboZoom = 0x7504;
 constexpr UINT kCmdToggleStandardToolbar = 0x7101;
 constexpr UINT kCmdToggleFormattingToolbar = 0x7102;
+constexpr UINT kCmdExportPdf = 0x7103;
 constexpr UINT kCmdTextColorBase = 0x7200;
 constexpr UINT_PTR kSyncTimer = 0x951;
 constexpr wchar_t kOriginalPaneProcProperty[] = L"OpusWord95OriginalPaneProc";
@@ -325,6 +327,17 @@ void configure_word95_menus(HWND window) {
                         MF_BYPOSITION | MF_POPUP | MF_STRING,
                         reinterpret_cast<UINT_PTR>(format), L"F&ormat");
         }
+    }
+    HMENU file_menu = file_index >= 0 ? GetSubMenu(root, file_index) : nullptr;
+    if (file_menu != nullptr &&
+        GetMenuState(file_menu, kCmdExportPdf, MF_BYCOMMAND) ==
+            static_cast<UINT>(-1)) {
+        int exit_position = find_named_in(file_menu, L"Exit");
+        if (exit_position < 0) exit_position = GetMenuItemCount(file_menu);
+        InsertMenuW(file_menu, exit_position, MF_BYPOSITION | MF_SEPARATOR,
+                    0, nullptr);
+        InsertMenuW(file_menu, exit_position, MF_BYPOSITION | MF_STRING,
+                    kCmdExportPdf, L"E&xport as PDF...");
     }
     const int utilities_index = find_named(L"Utilities");
     if (utilities_index >= 0) {
@@ -2502,6 +2515,10 @@ LRESULT CALLBACK app_window_proc(HWND app, UINT message,
         }
         if (command == bcmColor) {
             show_text_color_palette(app, toolbar);
+            return 0;
+        }
+        if (command == kCmdExportPdf) {
+            OpusExportCurrentDocumentPdf();
             return 0;
         }
         if (command == kCmdToggleStandardToolbar) {

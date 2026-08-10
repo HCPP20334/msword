@@ -721,6 +721,7 @@ add_library(opus_x64_runtime STATIC
     port/original/opus_asm_search.cpp
     port/original/opus_sdm_cab.cpp
     port/original/opus_sdm_runtime.cpp
+    port/original/opus_modern_formats.cpp
 )
 target_compile_features(opus_x64_runtime PRIVATE cxx_std_20)
 target_compile_definitions(opus_x64_runtime PRIVATE
@@ -732,6 +733,7 @@ target_compile_definitions(opus_x64_runtime PRIVATE
     NOMINMAX
 )
 target_include_directories(opus_x64_runtime PRIVATE ${OPUS_ORIGINAL_INCLUDE_DIRS})
+target_link_libraries(opus_x64_runtime PUBLIC ole32 comdlg32 gdi32)
 if(MSVC)
     # Opus was built with unsigned plain characters; the byte-oriented string
     # and international-character assembly routines depend on that behavior.
@@ -943,6 +945,27 @@ foreach(config Debug Release RelWithDebInfo MinSizeRel)
     )
 endforeach()
 
+add_executable(opus_modern_formats_test
+    port/original/opus_modern_formats_test.cpp
+)
+target_compile_features(opus_modern_formats_test PRIVATE cxx_std_20)
+target_compile_definitions(opus_modern_formats_test PRIVATE NOMINMAX UNICODE _UNICODE)
+target_link_libraries(opus_modern_formats_test PRIVATE opus_x64_runtime user32 gdi32)
+if(MSVC)
+    target_compile_options(opus_modern_formats_test PRIVATE /W4 /utf-8)
+endif()
+set_target_properties(opus_modern_formats_test PROPERTIES
+    FOLDER "Original Opus x64/tests"
+    RUNTIME_OUTPUT_DIRECTORY "${MSWORD_BUILD_ROOT}/tests"
+    VS_GLOBAL_VcpkgApplocalDeps "false"
+)
+foreach(config Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${config}" config_upper)
+    set_target_properties(opus_modern_formats_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${MSWORD_BUILD_ROOT}/tests/${config}"
+    )
+endforeach()
+
 add_executable(opus_word1_ui_test
     port/original/opus_word1_ui_test.cpp
 )
@@ -968,6 +991,7 @@ endforeach()
 enable_testing()
 add_test(NAME opus_original_strtbl_test COMMAND $<TARGET_FILE:opus_original_strtbl_test>)
 add_test(NAME opus_x64_runtime_test COMMAND $<TARGET_FILE:opus_x64_runtime_test>)
+add_test(NAME opus_modern_formats_test COMMAND $<TARGET_FILE:opus_modern_formats_test>)
 add_test(NAME opus_original_sttb_test COMMAND $<TARGET_FILE:opus_original_sttb_test>)
 add_test(NAME opus_original_plc_test COMMAND $<TARGET_FILE:opus_original_plc_test>)
 add_test(NAME opus_sdm_cab_test COMMAND $<TARGET_FILE:opus_sdm_cab_test>)
@@ -1005,3 +1029,7 @@ add_test(NAME opus_word1_save_as_test
     COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --save-as
 )
 set_tests_properties(opus_word1_save_as_test PROPERTIES TIMEOUT 20)
+add_test(NAME opus_word1_pdf_export_test
+    COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --pdf-export
+)
+set_tests_properties(opus_word1_pdf_export_test PROPERTIES TIMEOUT 25)

@@ -103,6 +103,85 @@ static int vWin95ZoomPercent = 100;
 static int vWin95BaseDxsInch = 0;
 static int vWin95BaseDysInch = 0;
 
+int OpusExportCurrentDocumentPdf()
+{
+	int doc;
+	HANDLE hText;
+	LPCH lpch;
+	int result;
+	int cchText = 0;
+	int fAfterReturn = fFalse;
+	CP cp;
+	CP cpMac;
+	extern int vccpFetch;
+	extern CHAR HUGE *vhpchFetch;
+	extern int N_FetchCp();
+	extern int OpusExportTextToPdfDialog();
+
+	if (selCur.doc == docNil)
+		return fFalse;
+	doc = DocMother(selCur.doc);
+	cpMac = CpMacDocEdit(doc);
+	if (cpMac < cp0 || cpMac > 0x3fffffffL)
+		return fFalse;
+	hText = GlobalAlloc(GMEM_MOVEABLE, (DWORD)(cpMac * 2L + 1L));
+	if (hText == hNil || (lpch = GlobalLockClip(hText)) == NULL)
+		{
+		if (hText != hNil)
+			GlobalFree(hText);
+		return fFalse;
+		}
+
+	for (cp = cp0; cp < cpMac; )
+		{
+		int ich;
+		int cch;
+		FetchCp(doc, cp, fcmChars);
+		if (vccpFetch <= 0 || vhpchFetch == NULL)
+			{
+			GlobalUnlock(hText);
+			GlobalFree(hText);
+			return fFalse;
+			}
+		cch = (int)CpMin((CP)vccpFetch, cpMac - cp);
+		for (ich = 0; ich < cch; ++ich)
+			{
+			int ch = (unsigned char)vhpchFetch[ich];
+			if (ch == chReturn)
+				{
+				lpch[cchText++] = '\r';
+				lpch[cchText++] = '\n';
+				fAfterReturn = fTrue;
+				}
+			else if (ch == chEop)
+				{
+				if (!fAfterReturn)
+					{
+					lpch[cchText++] = '\r';
+					lpch[cchText++] = '\n';
+					}
+				fAfterReturn = fFalse;
+				}
+			else
+				{
+				fAfterReturn = fFalse;
+				if (ch == chTable || ch == chTab)
+					lpch[cchText++] = '\t';
+				else if (ch == chSect || ch == chColumnBreak)
+					lpch[cchText++] = '\f';
+				else if (ch >= chSpace || ch == chNonReqHyphen)
+					lpch[cchText++] = (char)ch;
+				}
+			}
+		cp += cch;
+		}
+	lpch[cchText] = '\0';
+	result = OpusExportTextToPdfDialog(vhwndApp, lpch, cchText);
+	GlobalUnlock(hText);
+	GlobalFree(hText);
+	return result;
+}
+
 /* The Word 1.x Color command opens a keyboard prompt.  The Win95 chrome
    supplies a palette instead, but still applies the original character
    property so document storage and formatting behavior remain unchanged. */
