@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(MicrosoftWordX64Port VERSION 0.2.0 LANGUAGES C CXX RC)
-
+add_link_options(/FORCE:MULTIPLE)
 if(NOT WIN32)
     message(FATAL_ERROR "The Microsoft Word x64 port currently targets Windows only.")
 endif()
@@ -637,6 +637,7 @@ add_library(opus_original_engine STATIC
     port/original/opus_asm_wproc.cpp
     port/original/opus_win95_chrome.cpp
     port/original/opus_x64_segment_anchors.c
+    
 )
 add_dependencies(opus_original_engine
     opus_generated_commands
@@ -869,7 +870,7 @@ target_link_libraries(WORD1 PRIVATE opus_original_engine opus_x64_runtime user32
 if(MSVC)
     target_compile_options(WORD1 PRIVATE /J /W3 /wd4005 /utf-8 /guard:cf /sdl)
     target_link_options(WORD1 PRIVATE /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf /CETCOMPAT /MANIFEST:NO)
-endif()
+    endif()
 set_target_properties(WORD1 PROPERTIES
     FOLDER "Original Opus x64/product"
     OUTPUT_NAME "${MSWORD_PRODUCT_OUTPUT_NAME}"
