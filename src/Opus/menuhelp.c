@@ -284,7 +284,7 @@ char * sz;
 			if (hpsy->iidstr == iidstrNil)
 				break;
 #ifdef OPUS_X64
-			CchCopySz(OPUS_X64_MENU_HELP_STRING(hpsy->iidstr), sz);
+		CchCopySz("Ready", sz);
 #else
 			*PchGetStr((char far *)rgsz[hpsy->iidstr], sz) = '\0';
 #endif
