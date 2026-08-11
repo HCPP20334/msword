@@ -1002,27 +1002,50 @@ const char *sz;
 /* Variant used while a DOCX is being opened.  The new document has not yet
    become selCur.doc, so the normal ribbon adapter would add the font to the
    document that was active before File Open. */
-EXPORT int OpusX64FtcFromFontNameForDoc(doc, sz)
+EXPORT int OpusX64FtcFromFontNameForDoc(doc, sz, charset)
 int doc;
 const char *sz;
+int charset;
 {
+	int cch;
+	struct FFN *pffn;
+	char rgch[cbFfnLast] = {0};
+
 	if (sz == NULL || *sz == '\0')
 		return wNinch;
-	/* Word 1.x keeps only three guaranteed GDI font slots in a new plain-text
-	   document: Times, Symbol, and Helvetica.  Adding Office-era fonts before
-	   the imported document becomes current can alias the new ftc to Symbol.
-	   Preserve the requested family safely; Helvetica is the closest available
-	   substitute for Aptos/Calibri/Arial and retains ANSI character mapping. */
+	/* A new Word 1.x document exposes only the three guaranteed screen-font
+	   slots while DOCX formatting is applied.  Adding a normal ANSI font at
+	   this point can alias it to slot 1 (Symbol), corrupting every Latin
+	   character in the document.  Keep the historical safe mappings for ANSI
+	   faces; charset-specific runs still get real FFN records below. */
 	if (!FNeNcSz(sz, "Symbol") || !FNeNcSz(sz, "Wingdings"))
 		return 1;
-	if (!FNeNcSz(sz, "Times New Roman") || !FNeNcSz(sz, "Times") ||
-			!FNeNcSz(sz, "Georgia") || !FNeNcSz(sz, "Garamond") ||
-			!FNeNcSz(sz, "Cambria"))
-		return ftcDefault;
-	if (!FNeNcSz(sz, "Courier") || !FNeNcSz(sz, "Courier New") ||
-			!FNeNcSz(sz, "Consolas"))
-		return FtcFromDocIbst(doc, ibstCourier);
-	return 2;
+	if (charset == ANSI_CHARSET || charset == DEFAULT_CHARSET)
+		{
+		if (!FNeNcSz(sz, "Times New Roman") || !FNeNcSz(sz, "Times") ||
+				!FNeNcSz(sz, "Georgia") || !FNeNcSz(sz, "Garamond") ||
+				!FNeNcSz(sz, "Cambria"))
+			return ftcDefault;
+		if (!FNeNcSz(sz, "Courier") || !FNeNcSz(sz, "Courier New") ||
+				!FNeNcSz(sz, "Consolas"))
+			return FtcFromDocIbst(doc, ibstCourier);
+		return 2;
+		}
+	pffn = (struct FFN *)rgch;
+	if (CchSz(sz) > LF_FACESIZE - 1)
+		{
+		bltbyte(sz, pffn->szFfn, LF_FACESIZE - 1);
+		pffn->szFfn[LF_FACESIZE - 1] = '\0';
+		}
+	else
+		CchCopySz(sz, pffn->szFfn);
+	cch = CchStripString(pffn->szFfn, CchSz(pffn->szFfn) - 1) + 1;
+	if (cch <= 1)
+		return wNinch;
+	pffn->ffid = FF_DONTCARE;
+	pffn->cbFfnM1 = CbFfnFromCchSzFfn(cch) - 1;
+	ChsPffn(pffn) = (charset >= 0 && charset <= 255) ? charset : ANSI_CHARSET;
+	return FtcChkDocFfn(doc, pffn);
 }
 
 EXPORT int OpusX64HpsFromFontSize(sz)
@@ -1066,6 +1089,22 @@ int cchMax;
 	szFont = ((struct FFN *)PstFromSttb(vhsttbFont, ibst))->szFfn;
 	bltbyte(szFont, sz, min(CchSz(szFont), cchMax));
 	sz[cchMax - 1] = '\0';
+}
+
+EXPORT int OpusX64CharsetFromFtc(doc, ftc)
+int doc;
+int ftc;
+{
+	int ibst;
+	struct FFN *pffn;
+
+	if (doc == docNil || ftc == wNinch)
+		return ANSI_CHARSET;
+	ibst = IbstFontFromFtcDoc(ftc, doc);
+	if (ibst == iNil)
+		return ANSI_CHARSET;
+	pffn = (struct FFN *)PstFromSttb(vhsttbFont, ibst);
+	return (unsigned char)ChsPffn(pffn);
 }
 #endif
 

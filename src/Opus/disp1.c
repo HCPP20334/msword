@@ -128,6 +128,10 @@ extern struct DBS       vdbs;
 
 extern struct PREF      vpref;
 extern struct PRI       vpri;
+#ifdef OPUS_X64
+extern int OpusUnicodeExtTextOut();
+extern int OpusUnicodeHasRange();
+#endif
 
 extern int		vlm;
 extern int              vfPrvwDisp;
@@ -1256,13 +1260,26 @@ LDacNop:
 	 				else
 						{
 LRealExtTextOut:
-	 					ExtTextOut(hdc, xp, yp,
-	 						eto, 			/* action bits */
-	 						fRcAdjusted ? (LPRECT)&rcAdjusted :
-	 						(LPRECT)&rcOpaque,  	/* opaque rect */
-	 						(LPCH)&vfli.rgch [ich],	/* string */
-	 						cch,			/* length */
-	 						lpdxp );		/* lpdx */
+#ifdef OPUS_X64
+					ExtTextOut(hdc, xp, yp, eto,
+						fRcAdjusted ? (LPRECT)&rcAdjusted :
+						(LPRECT)&rcOpaque,
+						(LPCH)&vfli.rgch [ich], cch, lpdxp);
+					if (OpusUnicodeHasRange(vfli.doc,
+							vfli.cpMin + dcpVanish + ich, cch))
+						OpusUnicodeExtTextOut(hdc, xp, yp, eto,
+							fRcAdjusted ? (LPRECT)&rcAdjusted :
+							(LPRECT)&rcOpaque,
+						vfli.doc,
+						vfli.cpMin + dcpVanish + ich,
+							(LPCH)&vfli.rgch [ich], cch, lpdxp);
+#else
+					ExtTextOut(hdc, xp, yp,
+						eto,
+						fRcAdjusted ? (LPRECT)&rcAdjusted :
+						(LPRECT)&rcOpaque,
+						(LPCH)&vfli.rgch [ich], cch, lpdxp);
+#endif
 	 					}
                     vrf.fInExternalCall = fFalse;
 					(char *) pchr = (char *)*vhgrpchr + bchrCur;

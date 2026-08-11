@@ -1,10 +1,12 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <windowsx.h>
+#include <imm.h>
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -36,6 +38,14 @@ extern "C" int OpusAdjustWin95HorizontalMargin(
     HWND ruler, int left_margin, int delta_pixels);
 extern "C" void OpusDrawWin95HorizontalRuler(HWND ruler);
 extern "C" int OpusExportCurrentDocumentPdf(void);
+extern "C" int OpusGetUnicodeSelection(
+    int* doc, long* cp_first, long* cp_lim);
+extern "C" int OpusUnicodeLegacyByteForScalar(unsigned int scalar);
+extern "C" int OpusUnicodeSetScalar(
+    int doc, long cp, unsigned int scalar);
+extern "C" int OpusUnicodeSetInputLanguage(const char* language);
+extern "C" int OpusUnicodeGetInputLanguage(char* language, int capacity);
+extern "C" int OpusQueueUnicodeWmChar(HWND pane, unsigned int code_unit);
 
 namespace {
 
@@ -57,7 +67,10 @@ constexpr UINT kCmdToggleStandardToolbar = 0x7101;
 constexpr UINT kCmdToggleFormattingToolbar = 0x7102;
 constexpr UINT kCmdExportPdf = 0x7103;
 constexpr UINT kCmdTextColorBase = 0x7200;
+constexpr UINT kCmdLanguageBase = 0x7300;
 constexpr UINT_PTR kSyncTimer = 0x951;
+constexpr UINT kWmCommitUnicodeScalar = WM_APP + 0x452;
+constexpr std::size_t kMaxPendingUnicodeInput = 0xffff;
 constexpr wchar_t kOriginalPaneProcProperty[] = L"OpusWord95OriginalPaneProc";
 
 enum class FormatGlyph {
@@ -168,8 +181,47 @@ struct ToolbarState {
 HBRUSH g_menu_brush = nullptr;
 HMENU g_table_menu = nullptr;
 HMENU g_toolbars_menu = nullptr;
+HMENU g_language_menu = nullptr;
 WNDPROC g_original_app_proc = nullptr;
 bool g_word95_page_view_active = false;
+wchar_t g_pending_high_surrogate = 0;
+
+struct LanguageChoice {
+    UINT command;
+    const wchar_t* label;
+    const char* tag;
+};
+
+struct PendingUnicodeInput {
+    int doc = -1;
+    long cp = 0;
+    std::uint32_t scalar = 0;
+    int retries = 0;
+};
+
+std::deque<PendingUnicodeInput> g_pending_unicode_inputs;
+PendingUnicodeInput g_active_unicode_input;
+bool g_unicode_input_active = false;
+
+constexpr std::array<LanguageChoice, 17> kLanguageChoices{{
+    {kCmdLanguageBase, L"&Automatic (Keyboard)", "auto"},
+    {kCmdLanguageBase + 1, L"&English (United States)", "en-US"},
+    {kCmdLanguageBase + 2, L"&Spanish", "es-ES"},
+    {kCmdLanguageBase + 3, L"&French", "fr-FR"},
+    {kCmdLanguageBase + 4, L"&German", "de-DE"},
+    {kCmdLanguageBase + 5, L"&Polish / Central European", "pl-PL"},
+    {kCmdLanguageBase + 6, L"&Greek", "el-GR"},
+    {kCmdLanguageBase + 7, L"&Russian / Cyrillic", "ru-RU"},
+    {kCmdLanguageBase + 8, L"&Turkish", "tr-TR"},
+    {kCmdLanguageBase + 9, L"&Hebrew", "he-IL"},
+    {kCmdLanguageBase + 10, L"&Arabic", "ar-SA"},
+    {kCmdLanguageBase + 11, L"&Thai", "th-TH"},
+    {kCmdLanguageBase + 12, L"&Vietnamese", "vi-VN"},
+    {kCmdLanguageBase + 13, L"&Japanese", "ja-JP"},
+    {kCmdLanguageBase + 14, L"Chinese (&Simplified)", "zh-CN"},
+    {kCmdLanguageBase + 15, L"Chinese (&Traditional)", "zh-TW"},
+    {kCmdLanguageBase + 16, L"&Korean", "ko-KR"},
+}};
 
 struct VerticalRulerDragState {
     HWND pane = nullptr;
@@ -346,6 +398,33 @@ void configure_word95_menus(HWND window) {
         ModifyMenuW(root, utilities_index,
                     MF_BYPOSITION | MF_POPUP | MF_STRING,
                     reinterpret_cast<UINT_PTR>(tools), L"&Tools");
+    }
+    const int tools_index = find_named(L"Tools");
+    HMENU tools_menu = tools_index >= 0 ? GetSubMenu(root, tools_index) :
+        (utilities_index >= 0 ? GetSubMenu(root, utilities_index) : nullptr);
+    if (g_language_menu == nullptr || !IsMenu(g_language_menu)) {
+        g_language_menu = CreatePopupMenu();
+        if (g_language_menu != nullptr) {
+            for (const LanguageChoice& choice : kLanguageChoices) {
+                AppendMenuW(g_language_menu, MF_STRING, choice.command,
+                            choice.label);
+            }
+        }
+    }
+    if (tools_menu != nullptr && g_language_menu != nullptr) {
+        bool present = false;
+        for (int index = 0; index < GetMenuItemCount(tools_menu); ++index) {
+            if (GetSubMenu(tools_menu, index) == g_language_menu) {
+                present = true;
+                break;
+            }
+        }
+        if (!present) {
+            AppendMenuW(tools_menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(tools_menu, MF_POPUP | MF_STRING,
+                        reinterpret_cast<UINT_PTR>(g_language_menu),
+                        L"&Language");
+        }
     }
 
     if (g_table_menu == nullptr || !IsMenu(g_table_menu)) {
@@ -2313,9 +2392,153 @@ void show_document_context_menu(HWND pane, POINT screen_point) {
     }
 }
 
+void update_language_menu_check() {
+    if (g_language_menu == nullptr) return;
+    char selected[32]{};
+    OpusUnicodeGetInputLanguage(selected, static_cast<int>(std::size(selected)));
+    UINT command = kCmdLanguageBase;
+    for (const LanguageChoice& choice : kLanguageChoices) {
+        if (_stricmp(selected, choice.tag) == 0) {
+            command = choice.command;
+            break;
+        }
+    }
+    CheckMenuRadioItem(g_language_menu, kCmdLanguageBase,
+                       kCmdLanguageBase +
+                           static_cast<UINT>(kLanguageChoices.size() - 1),
+                       command, MF_BYCOMMAND);
+}
+
+bool start_next_unicode_input(HWND pane) {
+    if (g_unicode_input_active || g_pending_unicode_inputs.empty())
+        return true;
+    int doc_before = -1;
+    long cp_before = 0;
+    long cp_lim_before = 0;
+    if (!OpusGetUnicodeSelection(&doc_before, &cp_before, &cp_lim_before)) {
+        g_pending_unicode_inputs.pop_front();
+        return false;
+    }
+    g_active_unicode_input = g_pending_unicode_inputs.front();
+    g_pending_unicode_inputs.pop_front();
+    g_active_unicode_input.doc = doc_before;
+    g_active_unicode_input.cp = cp_before;
+    g_active_unicode_input.retries = 0;
+    g_unicode_input_active = true;
+    const WPARAM legacy = g_active_unicode_input.scalar < 0x20 ?
+        static_cast<WPARAM>(g_active_unicode_input.scalar) :
+        static_cast<WPARAM>(OpusUnicodeLegacyByteForScalar(
+            g_active_unicode_input.scalar) & 0xff);
+    if (!PostMessageW(pane, WM_CHAR, legacy, 1) ||
+        !PostMessageW(pane, WM_LBUTTONUP, 0, 0) ||
+        !PostMessageW(pane, kWmCommitUnicodeScalar, 0, 0)) {
+        g_unicode_input_active = false;
+        return false;
+    }
+    return true;
+}
+
+bool queue_unicode_input(HWND pane, const std::uint32_t scalar) {
+    if (pane == nullptr || scalar == 0 || scalar > 0x10ffff ||
+        (scalar >= 0xd800 && scalar <= 0xdfff)) return false;
+    if (g_pending_unicode_inputs.size() >= kMaxPendingUnicodeInput)
+        return false;
+    try {
+        g_pending_unicode_inputs.push_back({-1, 0, scalar, 0});
+    } catch (...) {
+        return false;
+    }
+    return start_next_unicode_input(pane);
+}
+
+bool insert_unicode_scalar(HWND pane, const std::uint32_t scalar) {
+    return scalar >= 0x20 && queue_unicode_input(pane, scalar);
+}
+
+void insert_unicode_text(HWND pane, const std::wstring& text) {
+    for (std::size_t index = 0; index < text.size();) {
+        std::uint32_t scalar = static_cast<std::uint16_t>(text[index++]);
+        if (scalar >= 0xd800 && scalar <= 0xdbff && index < text.size()) {
+            const std::uint32_t low = static_cast<std::uint16_t>(text[index]);
+            if (low >= 0xdc00 && low <= 0xdfff) {
+                ++index;
+                scalar = 0x10000 + ((scalar - 0xd800) << 10) +
+                         (low - 0xdc00);
+            }
+        }
+        if (scalar == L'\r' || scalar == L'\n' || scalar == L'\t')
+            queue_unicode_input(pane, scalar);
+        else
+            insert_unicode_scalar(pane, scalar);
+    }
+}
+
 LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
                                      WPARAM w_param, LPARAM l_param) {
     WNDPROC original = original_pane_proc(pane);
+    if (message == kWmCommitUnicodeScalar) {
+        if (g_unicode_input_active) {
+            int doc_after = -1;
+            long cp_after = 0;
+            long cp_lim_after = 0;
+            if (OpusGetUnicodeSelection(
+                    &doc_after, &cp_after, &cp_lim_after) &&
+                doc_after == g_active_unicode_input.doc &&
+                cp_after > g_active_unicode_input.cp) {
+                if (g_active_unicode_input.scalar >= 0x20)
+                    OpusUnicodeSetScalar(
+                        g_active_unicode_input.doc,
+                        g_active_unicode_input.cp,
+                        g_active_unicode_input.scalar);
+                g_unicode_input_active = false;
+                InvalidateRect(pane, nullptr, FALSE);
+                start_next_unicode_input(pane);
+            } else if (doc_after == g_active_unicode_input.doc &&
+                       g_active_unicode_input.retries++ < 8) {
+                PostMessageW(pane, WM_LBUTTONUP, 0, 0);
+                PostMessageW(pane, kWmCommitUnicodeScalar, 0, 0);
+            } else {
+                g_unicode_input_active = false;
+                start_next_unicode_input(pane);
+            }
+        }
+        return 0;
+    }
+    if (message == WM_UNICHAR) {
+        if (w_param == UNICODE_NOCHAR) return TRUE;
+        insert_unicode_scalar(pane, static_cast<std::uint32_t>(w_param));
+        return 0;
+    }
+    /* The original message loop marks already-translated byte input by
+       setting bit 15 (0x80xx).  That is an internal Word flag, not a Unicode
+       code point, and must reach the legacy pane procedure unchanged. */
+    if (message == WM_CHAR && (w_param & 0xff00) != 0x8000 &&
+        w_param >= 0x80) {
+        OpusQueueUnicodeWmChar(
+            pane, static_cast<unsigned int>(w_param));
+        return 0;
+    }
+    if (message == WM_IME_COMPOSITION &&
+        (l_param & GCS_RESULTSTR) != 0) {
+        HIMC context = ImmGetContext(pane);
+        if (context != nullptr) {
+            const LONG byte_count = ImmGetCompositionStringW(
+                context, GCS_RESULTSTR, nullptr, 0);
+            if (byte_count > 0 && byte_count <= 1024 * 1024 &&
+                (byte_count % sizeof(wchar_t)) == 0) {
+                std::wstring result(
+                    static_cast<std::size_t>(byte_count) / sizeof(wchar_t),
+                    L'\0');
+                if (ImmGetCompositionStringW(context, GCS_RESULTSTR,
+                        &result[0], static_cast<DWORD>(byte_count)) ==
+                    byte_count) {
+                    insert_unicode_text(pane, result);
+                }
+            }
+            ImmReleaseContext(pane, context);
+            return 0;
+        }
+    }
     if (message == WM_MOUSEWHEEL) {
         if (g_document_wheel.pane != pane) {
             g_document_wheel = {};
@@ -2509,6 +2732,9 @@ LRESULT CALLBACK document_pane_proc(HWND pane, UINT message,
         if (g_document_wheel.pane == pane) {
             g_document_wheel = {};
         }
+        g_pending_unicode_inputs.clear();
+        g_unicode_input_active = false;
+        g_pending_high_surrogate = 0;
         clear_page_snapshots(pane);
         RemovePropW(pane, kOriginalPaneProcProperty);
         if (original != nullptr) {
@@ -2590,6 +2816,15 @@ LRESULT CALLBACK app_window_proc(HWND app, UINT message,
             OpusExportCurrentDocumentPdf();
             return 0;
         }
+        if (command >= kCmdLanguageBase &&
+            command < kCmdLanguageBase + kLanguageChoices.size()) {
+            const LanguageChoice& choice =
+                kLanguageChoices[command - kCmdLanguageBase];
+            OpusUnicodeSetInputLanguage(choice.tag);
+            update_language_menu_check();
+            DrawMenuBar(app);
+            return 0;
+        }
         if (command == kCmdToggleStandardToolbar) {
             toggle_toolbar_row(app, toolbar, true);
             return 0;
@@ -2599,6 +2834,7 @@ LRESULT CALLBACK app_window_proc(HWND app, UINT message,
             return 0;
         }
     } else if (message == WM_INITMENUPOPUP) {
+        update_language_menu_check();
         HWND toolbar = FindWindowExW(app, nullptr, kToolbarClass, nullptr);
         ToolbarState* state = toolbar_state(toolbar);
         if (state != nullptr) {
@@ -2865,6 +3101,27 @@ bool register_ruler_overlay_class() {
 }
 
 }  // namespace
+
+extern "C" int OpusQueueUnicodeWmChar(
+    HWND pane, const unsigned int code_unit) {
+    if (code_unit >= 0xd800 && code_unit <= 0xdbff) {
+        g_pending_high_surrogate = static_cast<wchar_t>(code_unit);
+        return TRUE;
+    }
+    std::uint32_t scalar = code_unit;
+    if (code_unit >= 0xdc00 && code_unit <= 0xdfff) {
+        if (g_pending_high_surrogate < 0xd800 ||
+            g_pending_high_surrogate > 0xdbff) {
+            g_pending_high_surrogate = 0;
+            return FALSE;
+        }
+        scalar = 0x10000 +
+            ((static_cast<std::uint32_t>(g_pending_high_surrogate) -
+              0xd800) << 10) + (code_unit - 0xdc00);
+    }
+    g_pending_high_surrogate = 0;
+    return insert_unicode_scalar(pane, scalar);
+}
 
 extern "C" void OpusDrawWin95HorizontalRuler(HWND ruler) {
     HDC dc = GetDC(ruler);

@@ -96,6 +96,8 @@ extern struct FTI vfti;
 extern char             (**vhgrpchr)[];
 extern int              vbchrMac;
 extern struct STTB      **vhsttbFont;
+extern unsigned int     OpusUnicodeScalarAt();
+extern int              OpusQueueUnicodeWmChar();
 #endif
 extern struct FCB     **mpfnhfcb[];
 extern int 		      vfnPreload;
@@ -1834,6 +1836,12 @@ LONG      lParam;
 				extern int vOpusPdfExportStage;
 				return (LRESULT)vOpusPdfExportStage;
 				}
+			case 106:
+				return (LRESULT)OpusUnicodeScalarAt(
+						selCur.doc, (CP)lParam);
+			case 107:
+				return (LRESULT)OpusQueueUnicodeWmChar(
+						hwnd, (unsigned int)lParam);
 			}
 		return (LRESULT) -1;
 #endif
@@ -2500,6 +2508,17 @@ LPMSG lpmsg;
 
 	wm = lpmsg->message;
 	kc = lpmsg->wParam;	/* key code or char */
+
+#ifdef OPUS_X64
+	/* Unicode window classes deliver non-ANSI keyboard layouts as UTF-16
+	   WM_CHAR units.  Queue those through the compatibility layer before the
+	   legacy insertion loop truncates the character to one byte. */
+	if (wm == WM_CHAR && !vfInsertMode && (unsigned int)kc >= 0x100)
+		{
+		OpusQueueUnicodeWmChar(lpmsg->hwnd, (unsigned int)kc);
+		return fTrue;
+		}
+#endif
 
 
 #ifdef COMING_SOON_TO_A_WORD_PROCESSOR_NEAR_YOU

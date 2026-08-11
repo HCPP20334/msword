@@ -73,6 +73,8 @@ BOOL vfNoInval=0; /* can be > 1 */
 
 #ifdef OPUS_X64
 struct PLC              **HplcCreateEdc();
+extern void OpusUnicodeOnReplace();
+extern void OpusUnicodeOnReplaceCps();
 #else
 struct PLC              *HplcCreateEdc();
 #endif
@@ -463,6 +465,9 @@ struct CA *pca;
 int fn;
 FC fc, dfc;
 {
+	int docUnicode = pca->doc;
+	CP cpFirstUnicode = pca->cpFirst;
+	CP cpLimUnicode = pca->cpLim;
 	struct XBC xbc;
 	struct XSR *pxsr;
 /* this should be the maximum number of calls to XReplace or XReplaceCps that
@@ -489,6 +494,7 @@ should go off) */
 	XReplace(fFalse, &xbc, pxsr);
 	EndCommit();
 	CloseTns(&xbc);
+	OpusUnicodeOnReplace(docUnicode, cpFirstUnicode, cpLimUnicode, dfc);
 
 	return fTrue;
 }
@@ -821,6 +827,12 @@ on failure (in which case document is unchanged) */
 HANDNATIVE BOOL C_FReplaceCps(pcaDel, pcaIns)
 struct CA *pcaDel, *pcaIns;
 {
+	int docDelUnicode = pcaDel->doc;
+	int docInsUnicode = pcaIns->doc;
+	CP cpDelFirstUnicode = pcaDel->cpFirst;
+	CP cpDelLimUnicode = pcaDel->cpLim;
+	CP cpInsFirstUnicode = pcaIns->cpFirst;
+	CP cpInsLimUnicode = pcaIns->cpLim;
 	struct XBC xbc;
 	struct XSR *pxsr;
 /* this should be the maximum number of calls to XReplace or XReplaceCps that
@@ -848,6 +860,9 @@ should go off).  Win is greater than Mac because of annotations. */
 	XReplaceCps(fFalse, &xbc, pxsr);
 	EndCommit();
 	CloseTns(&xbc);
+	OpusUnicodeOnReplaceCps(docDelUnicode, cpDelFirstUnicode,
+		cpDelLimUnicode, docInsUnicode, cpInsFirstUnicode,
+		cpInsLimUnicode);
 
 	return fTrue;
 }

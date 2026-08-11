@@ -653,7 +653,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
         std::cerr <<
             "usage: opus_word1_ui_test WORD1.exe "
             "[--typing|--interaction|--selection|--caret|--formatting|--color|"
-            "--font-typing|--clipboard|--about|--save-as|--pdf-export|"
+            "--font-typing|--unicode|--clipboard|--about|--save-as|--pdf-export|"
             "--docx-open FILE|--docx-format-open FILE|"
             "--docx-pdf-export FILE]\n";
         return 1;
@@ -678,6 +678,9 @@ int wmain(const int argument_count, wchar_t** arguments) {
     const bool font_typing_mode =
         argument_count == 3 &&
         std::wcscmp(arguments[2], L"--font-typing") == 0;
+    const bool unicode_mode =
+        argument_count == 3 &&
+        std::wcscmp(arguments[2], L"--unicode") == 0;
     const bool about_mode =
         argument_count == 3 &&
         std::wcscmp(arguments[2], L"--about") == 0;
@@ -703,7 +706,7 @@ int wmain(const int argument_count, wchar_t** arguments) {
          formatted_docx_open_mode);
     if (argument_count == 3 && !typing_mode && !interaction_mode &&
         !selection_mode && !caret_mode && !formatting_mode && !color_mode &&
-        !font_typing_mode && !clipboard_mode && !about_mode &&
+        !font_typing_mode && !unicode_mode && !clipboard_mode && !about_mode &&
         !save_as_mode && !pdf_export_mode) {
         std::cerr << "unknown test mode\n";
         return 1;
@@ -1090,6 +1093,67 @@ int wmain(const int argument_count, wchar_t** arguments) {
                       << selected_lim << '\n';
             return fail(process, 75,
                         "Ctrl+A did not change the document selection");
+        }
+        TerminateProcess(process.hProcess, 0);
+        WaitForSingleObject(process.hProcess, 2000);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        return 0;
+    }
+    if (unicode_mode) {
+        const HWND pane = find_descendant_by_class(main_window, L"OpusWwd");
+        DWORD ignored_process_id = 0;
+        const DWORD thread_id =
+            GetWindowThreadProcessId(main_window, &ignored_process_id);
+        if (pane == nullptr ||
+            !make_foreground_and_focus(main_window, pane, thread_id)) {
+            return fail(process, 87,
+                        "Unicode test could not focus the document pane");
+        }
+        const LRESULT cp_first = SendMessageW(
+            pane, kWmOpusX64QuerySelection, 0, 0);
+        const std::array<std::uint32_t, 5> scalars{
+            0x041f, 0x03a9, 0x0645, 0x3053, 0x1f642};
+        for (std::size_t index = 0; index < scalars.size(); ++index) {
+            const std::uint32_t scalar = scalars[index];
+            bool accepted = false;
+            if (index == 0) {
+                DWORD_PTR result = 0;
+                accepted = SendMessageTimeoutW(
+                    pane, WM_UNICHAR, static_cast<WPARAM>(scalar), 1,
+                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 3000, &result) != FALSE;
+            } else {
+                accepted = SendMessageW(
+                    pane, kWmOpusX64QuerySelection, 107,
+                    static_cast<LPARAM>(scalar)) != FALSE;
+            }
+            if (!accepted) {
+                return fail(process, 88,
+                            "Unicode input message was not accepted");
+            }
+        }
+        Sleep(500);
+        const LRESULT cp_after = SendMessageW(
+            pane, kWmOpusX64QuerySelection, 0, 0);
+        bool scalars_preserved = cp_after ==
+            cp_first + static_cast<LRESULT>(scalars.size());
+        std::array<LRESULT, 5> actual_scalars{};
+        for (std::size_t index = 0;
+             index < scalars.size(); ++index) {
+            actual_scalars[index] = SendMessageW(
+                pane, kWmOpusX64QuerySelection, 106,
+                cp_first + static_cast<LRESULT>(index));
+            scalars_preserved = scalars_preserved &&
+                actual_scalars[index] == scalars[index];
+        }
+        if (!scalars_preserved) {
+            std::cerr << "Unicode input range=" << cp_first << "->"
+                      << cp_after << " scalars=";
+            for (const LRESULT actual : actual_scalars)
+                std::cerr << actual << ',';
+            std::cerr << '\n';
+            return fail(process, 89,
+                        "Unicode code points were not preserved in the document");
         }
         TerminateProcess(process.hProcess, 0);
         WaitForSingleObject(process.hProcess, 2000);

@@ -70,6 +70,11 @@ extern char	szEmpty[];
 extern struct SCI       vsci;
 extern int              vwWinVersion;
 extern int				wwCur;
+#ifdef OPUS_X64
+extern HANDLE OpusUnicodeCreateClipboardHandle();
+extern int OpusUnicodeClipboardToLegacy();
+extern int OpusUnicodeBindPendingClipboard();
+#endif
 
 extern LPCH LpchIncr();
 
@@ -279,6 +284,21 @@ int *pfBlankPic;  /* set true if an empty picture; else ignored */
 	AssureLegalSel (PcaSet(&ca, doc, cpFirst, cpLim));
 	switch (cf)
 		{
+	case CF_UNICODETEXT:
+#ifdef OPUS_X64
+		{
+		HANDLE hAnsi;
+		HANDLE hUnicode;
+		hAnsi = HWriteText(ca.doc, ca.cpFirst, ca.cpLim, cbInitial);
+		if (hAnsi == NULL)
+			return NULL;
+		hUnicode = OpusUnicodeCreateClipboardHandle(ca.doc, ca.cpFirst, hAnsi);
+		GlobalFree(hAnsi);
+		return hUnicode;
+		}
+#else
+		return NULL;
+#endif
 	case CF_TEXT:
 
 		return HWriteText (ca.doc, ca.cpFirst, ca.cpLim, cbInitial);
@@ -845,7 +865,7 @@ int FReadExtScrap()
 				{
 				vsab.fMayHavePic = vsab.fPict = fTrue;
 				}
-			if (cf != CF_TEXT)
+			if (cf != CF_TEXT && cf != CF_UNICODETEXT)
 				vsab.fFormatted = fTrue;
 			break;
 			}
@@ -884,6 +904,8 @@ int cbInitial;
 {
 	int docDest;
 	BOOL fOk;
+	BOOL fUnicode = fFalse;
+	HANDLE hConverted = NULL;
 	struct CA ca;
 
 #ifdef BZ
@@ -892,6 +914,18 @@ int cbInitial;
 
 	switch (cf)
 		{
+	case CF_UNICODETEXT:
+#ifdef OPUS_X64
+		if (!OpusUnicodeClipboardToLegacy(hData, &hConverted) ||
+				hConverted == NULL)
+			return fFalse;
+		hData = hConverted;
+		cf = CF_TEXT;
+		fUnicode = fTrue;
+		break;
+#else
+		return fFalse;
+#endif
 	case CF_TEXT:
 	case CF_DIB:
 	case CF_BITMAP:
@@ -917,7 +951,11 @@ int cbInitial;
 		docDest = docScrap;
 		/* otherwise use vdocScratch */
 	else  if ((docDest = DocCreateScratch (pca->doc)) == docNil)
+		{
+		if (hConverted != NULL)
+			GlobalFree(hConverted);
 		return fFalse;
+		}
 
 	/*  empty the destination doc and set styles, fonts to standard */
 	SetWholeDoc (docDest, PcaSetNil(&ca));
@@ -939,7 +977,11 @@ int cbInitial;
 		break;
 	case CF_TEXT:
 		fOk = FReadText (docDest, cf, hData, cbInitial);
+		if (fOk && fUnicode)
+			fOk = OpusUnicodeBindPendingClipboard(docDest);
 		}
+	if (hConverted != NULL)
+		GlobalFree(hConverted);
 
 	fOk &= (!vmerr.fMemFail && !vmerr.fDiskFail);
 
@@ -1843,7 +1885,8 @@ int cf;
 BOOL fPrPic;
 {
 
-	/* Desired order (win3 word: Notice text before picture formats):
+	/* Desired order (Unicode text precedes legacy formats):
+		 CF_UNICODETEXT
 		 cfRTF
 		 CF_TEXT
 		 cfPRPic
@@ -1876,7 +1919,9 @@ BOOL fPrPic;
 		goto LMetafile;		/* 4th or 5th choice */
 
 	case cfNil:
-		return cfRTF;           	/* 1st choice */
+		return CF_UNICODETEXT;	/* 1st choice */
+	case CF_UNICODETEXT:
+		return cfRTF;
 	case CF_TEXT:
 		if (fPrPic && cfPrPic != cfNil)
 			return cfPrPic;			/* 4th choice (Excel specific) */
@@ -1915,6 +1960,7 @@ BOOL fRestrictRTF;
 
 	switch (cf)
 		{
+	case CF_UNICODETEXT:
 	case CF_TEXT:
 		/* reject text for either a normal pic or an import field pic,
 					since it has no text result and would show nothing */

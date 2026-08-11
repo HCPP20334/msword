@@ -1808,6 +1808,7 @@ BOOL fPasteLink;
 			{
 			if ((fPasteLink && fmt == cfLink)
 					|| (!fPasteLink && (fmt == cfRTF ||
+					fmt == CF_UNICODETEXT ||
 					fmt == CF_TEXT ||
 					fmt == CF_BITMAP ||
 					fmt == CF_METAFILEPICT)))

@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -349,8 +350,140 @@ struct RunStyle {
     COLORREF color = RGB(0, 0, 0);
     bool auto_color = true;
     std::wstring font = L"Arial";
+    std::string language = "en-US";
+    int code_page = 1252;
+    int charset = ANSI_CHARSET;
     bool operator==(const RunStyle&) const = default;
 };
+
+struct LanguageProfile {
+    const char* tag;
+    int code_page;
+    int charset;
+    LANGID language_id;
+};
+
+constexpr LanguageProfile kLanguageProfiles[] = {
+    {"en-US", 1252, ANSI_CHARSET, MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US)},
+    {"es-ES", 1252, ANSI_CHARSET, MAKELANGID(LANG_SPANISH, SUBLANG_SPANISH_MODERN)},
+    {"fr-FR", 1252, ANSI_CHARSET, MAKELANGID(LANG_FRENCH, SUBLANG_FRENCH)},
+    {"de-DE", 1252, ANSI_CHARSET, MAKELANGID(LANG_GERMAN, SUBLANG_GERMAN)},
+    {"pl-PL", 1250, EASTEUROPE_CHARSET, MAKELANGID(LANG_POLISH, SUBLANG_DEFAULT)},
+    {"el-GR", 1253, GREEK_CHARSET, MAKELANGID(LANG_GREEK, SUBLANG_DEFAULT)},
+    {"ru-RU", 1251, RUSSIAN_CHARSET, MAKELANGID(LANG_RUSSIAN, SUBLANG_DEFAULT)},
+    {"tr-TR", 1254, TURKISH_CHARSET, MAKELANGID(LANG_TURKISH, SUBLANG_DEFAULT)},
+    {"he-IL", 1255, HEBREW_CHARSET, MAKELANGID(LANG_HEBREW, SUBLANG_DEFAULT)},
+    {"ar-SA", 1256, ARABIC_CHARSET, MAKELANGID(LANG_ARABIC, SUBLANG_ARABIC_SAUDI_ARABIA)},
+    {"th-TH", 874, THAI_CHARSET, MAKELANGID(LANG_THAI, SUBLANG_DEFAULT)},
+    {"vi-VN", 1258, VIETNAMESE_CHARSET, MAKELANGID(LANG_VIETNAMESE, SUBLANG_DEFAULT)},
+    {"ja-JP", 932, SHIFTJIS_CHARSET, MAKELANGID(LANG_JAPANESE, SUBLANG_DEFAULT)},
+    {"zh-CN", 936, GB2312_CHARSET, MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED)},
+    {"zh-TW", 950, CHINESEBIG5_CHARSET, MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_TRADITIONAL)},
+    {"ko-KR", 949, HANGEUL_CHARSET, MAKELANGID(LANG_KOREAN, SUBLANG_DEFAULT)},
+};
+
+const LanguageProfile& default_language_profile() {
+    return kLanguageProfiles[0];
+}
+
+bool tag_prefix(std::string_view value, std::string_view prefix) {
+    if (value.size() < prefix.size()) return false;
+    for (std::size_t index = 0; index < prefix.size(); ++index) {
+        const unsigned char left = static_cast<unsigned char>(value[index]);
+        const unsigned char right = static_cast<unsigned char>(prefix[index]);
+        if (std::tolower(left) != std::tolower(right)) return false;
+    }
+    return value.size() == prefix.size() || value[prefix.size()] == '-';
+}
+
+const LanguageProfile& profile_for_tag(std::string_view tag) {
+    for (const LanguageProfile& profile : kLanguageProfiles) {
+        if (_stricmp(std::string(tag).c_str(), profile.tag) == 0)
+            return profile;
+    }
+    struct Alias { const char* prefix; std::size_t profile; };
+    static constexpr Alias aliases[] = {
+        {"en", 0}, {"es", 1}, {"fr", 2}, {"de", 3}, {"pl", 4},
+        {"cs", 4}, {"sk", 4}, {"hu", 4}, {"ro", 4}, {"el", 5},
+        {"ru", 6}, {"uk", 6}, {"bg", 6}, {"sr", 6}, {"tr", 7},
+        {"he", 8}, {"iw", 8}, {"ar", 9}, {"fa", 9}, {"ur", 9},
+        {"th", 10}, {"vi", 11}, {"ja", 12}, {"zh-CN", 13},
+        {"zh-SG", 13}, {"zh", 14}, {"ko", 15},
+    };
+    for (const Alias& alias : aliases) {
+        if (tag_prefix(tag, alias.prefix)) return kLanguageProfiles[alias.profile];
+    }
+    return default_language_profile();
+}
+
+const LanguageProfile& profile_for_language_id(const LANGID language) {
+    const WORD primary = PRIMARYLANGID(language);
+    for (const LanguageProfile& profile : kLanguageProfiles) {
+        if (PRIMARYLANGID(profile.language_id) == primary) return profile;
+    }
+    return default_language_profile();
+}
+
+const LanguageProfile& profile_for_scalar(const std::uint32_t scalar) {
+    if (scalar >= 0x0370 && scalar <= 0x03ff) return kLanguageProfiles[5];
+    if (scalar >= 0x0400 && scalar <= 0x052f) return kLanguageProfiles[6];
+    if (scalar >= 0x0590 && scalar <= 0x05ff) return kLanguageProfiles[8];
+    if ((scalar >= 0x0600 && scalar <= 0x08ff) ||
+        (scalar >= 0xfb50 && scalar <= 0xfdff) ||
+        (scalar >= 0xfe70 && scalar <= 0xfeff)) return kLanguageProfiles[9];
+    if (scalar >= 0x0e00 && scalar <= 0x0e7f) return kLanguageProfiles[10];
+    if ((scalar >= 0x3040 && scalar <= 0x30ff) ||
+        (scalar >= 0x31f0 && scalar <= 0x31ff)) return kLanguageProfiles[12];
+    if ((scalar >= 0x3400 && scalar <= 0x9fff) ||
+        (scalar >= 0xf900 && scalar <= 0xfaff)) return kLanguageProfiles[13];
+    if ((scalar >= 0x1100 && scalar <= 0x11ff) ||
+        (scalar >= 0x3130 && scalar <= 0x318f) ||
+        (scalar >= 0xac00 && scalar <= 0xd7af)) return kLanguageProfiles[15];
+    return default_language_profile();
+}
+
+std::uint32_t scalar_at(std::wstring_view text, std::size_t& index) {
+    const std::uint32_t first = static_cast<std::uint16_t>(text[index++]);
+    if (first >= 0xd800 && first <= 0xdbff && index < text.size()) {
+        const std::uint32_t second = static_cast<std::uint16_t>(text[index]);
+        if (second >= 0xdc00 && second <= 0xdfff) {
+            ++index;
+            return 0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00);
+        }
+    }
+    if (first >= 0xd800 && first <= 0xdfff) return 0xfffd;
+    return first;
+}
+
+std::wstring scalar_to_wide(const std::uint32_t scalar) {
+    if (scalar <= 0xffff && !(scalar >= 0xd800 && scalar <= 0xdfff))
+        return std::wstring(1, static_cast<wchar_t>(scalar));
+    if (scalar <= 0x10ffff) {
+        const std::uint32_t value = scalar - 0x10000;
+        const wchar_t pair[] = {
+            static_cast<wchar_t>(0xd800 + (value >> 10)),
+            static_cast<wchar_t>(0xdc00 + (value & 0x3ff))};
+        return std::wstring(pair, 2);
+    }
+    return std::wstring(1, L'\xfffd');
+}
+
+char legacy_byte_for_scalar(const std::uint32_t scalar,
+                            const LanguageProfile& profile) {
+    if (scalar == 0) return '?';
+    const std::wstring wide = scalar_to_wide(scalar);
+    char bytes[4]{};
+    BOOL used_default = FALSE;
+    const int count = WideCharToMultiByte(
+        profile.code_page, WC_NO_BEST_FIT_CHARS, wide.data(),
+        static_cast<int>(wide.size()), bytes, static_cast<int>(sizeof(bytes)),
+        "?", &used_default);
+    if (count == 1 && !used_default && bytes[0] != '\0') return bytes[0];
+    const bool wide_script = profile.code_page == 932 ||
+        profile.code_page == 936 || profile.code_page == 949 ||
+        profile.code_page == 950 || scalar > 0xffff;
+    return wide_script ? 'W' : '?';
+}
 
 struct TextRun { RunStyle style; std::wstring text; };
 struct DocumentSettings {
@@ -448,9 +581,22 @@ void apply_run_properties(RunStyle& style, std::string_view props) {
     if (const std::string size = first_property_value(props, "sz"); !size.empty()) {
         parse_bounded_int(size, 2, 254, style.half_points);
     }
-    if (const std::string font = first_property_value(props, "rFonts", "ascii");
-        !font.empty()) {
+    std::string font = first_property_value(props, "rFonts", "ascii");
+    if (font.empty()) font = first_property_value(props, "rFonts", "hAnsi");
+    if (font.empty()) font = first_property_value(props, "rFonts", "eastAsia");
+    if (font.empty()) font = first_property_value(props, "rFonts", "cs");
+    if (!font.empty()) {
         style.font = xml_unescape(font);
+    }
+    std::string language = first_property_value(props, "lang", "val");
+    if (language.empty())
+        language = first_property_value(props, "lang", "eastAsia");
+    if (language.empty()) language = first_property_value(props, "lang", "bidi");
+    if (!language.empty()) {
+        const LanguageProfile& profile = profile_for_tag(language);
+        style.language = language;
+        style.code_page = profile.code_page;
+        style.charset = profile.charset;
     }
     if (const std::string color = first_property_value(props, "color");
         !color.empty() && color != "auto" && color.size() == 6) {
@@ -854,14 +1000,27 @@ struct PendingTableFormat {
     int columns = 0;
 };
 
+struct UnicodeCell {
+    std::uint32_t scalar = 0;
+    LANGID language = 0;
+};
+
+struct UnicodeDocument {
+    std::vector<UnicodeCell> cells;
+};
+
 struct PendingDocxImport {
     std::vector<PendingRunFormat> runs;
     std::vector<PendingParagraphFormat> paragraphs;
     std::vector<PendingTableFormat> tables;
+    std::vector<UnicodeCell> unicode_cells;
     DocumentSettings settings;
 };
 
 PendingDocxImport pending_docx_import;
+std::unordered_map<int, UnicodeDocument> unicode_documents;
+std::vector<UnicodeCell> pending_clipboard_cells;
+std::string input_language = "auto";
 
 struct PendingPdfExport {
     std::vector<Paragraph> paragraphs;
@@ -872,15 +1031,47 @@ struct PendingPdfExport {
 
 PendingPdfExport pending_pdf_export;
 
-std::string ansi_run_text(std::wstring_view text) {
+RunStyle effective_run_style(const TextRun& run) {
+    RunStyle style = run.style;
+    if (style.language.empty() || style.language == "en-US") {
+        for (std::size_t index = 0; index < run.text.size();) {
+            const std::uint32_t scalar = scalar_at(run.text, index);
+            const LanguageProfile& detected = profile_for_scalar(scalar);
+            if (detected.code_page != 1252) {
+                style.language = detected.tag;
+                style.code_page = detected.code_page;
+                style.charset = detected.charset;
+                break;
+            }
+        }
+    }
+    return style;
+}
+
+void append_legacy_scalar(std::string& result,
+                          std::vector<UnicodeCell>* cells,
+                          const std::uint32_t scalar,
+                          const LanguageProfile& profile) {
+    result.push_back(legacy_byte_for_scalar(scalar, profile));
+    if (cells != nullptr) cells->push_back({scalar, profile.language_id});
+}
+
+std::string legacy_run_text(std::wstring_view text, const RunStyle& style,
+                            std::vector<UnicodeCell>* cells) {
     std::string result;
-    for (const wchar_t character : text) {
-        if (character == L'\n') {
-            result += "\r\n";
-        } else if (character == L'\r') {
-            if (result.empty() || result.back() != '\r') result.push_back('\r');
+    const LanguageProfile& configured = profile_for_tag(style.language);
+    for (std::size_t index = 0; index < text.size();) {
+        const std::uint32_t scalar = scalar_at(text, index);
+        const LanguageProfile& profile = style.language.empty() ?
+            profile_for_scalar(scalar) : configured;
+        if (scalar == L'\n') {
+            append_legacy_scalar(result, cells, L'\r', profile);
+            append_legacy_scalar(result, cells, L'\n', profile);
+        } else if (scalar == L'\r') {
+            if (result.empty() || result.back() != '\r')
+                append_legacy_scalar(result, cells, scalar, profile);
         } else {
-            result += wide_to_ansi(std::wstring_view(&character, 1));
+            append_legacy_scalar(result, cells, scalar, profile);
         }
     }
     return result;
@@ -900,8 +1091,11 @@ std::string paragraphs_to_text(const std::vector<Paragraph>& paragraphs,
         for (const auto& run : paragraphs[index].runs) {
             PendingRunFormat run_format;
             run_format.cp_first = static_cast<long>(text.size());
-            run_format.style = run.style;
-            const std::string encoded = ansi_run_text(run.text);
+            run_format.style = effective_run_style(run);
+            std::vector<UnicodeCell>* cells = pending != nullptr ?
+                &pending->unicode_cells : nullptr;
+            const std::string encoded = legacy_run_text(
+                run.text, run_format.style, cells);
             require_parse_limit(encoded.size() <= kMaxTextBytes - text.size());
             text += encoded;
             run_format.cp_lim = static_cast<long>(text.size());
@@ -911,6 +1105,11 @@ std::string paragraphs_to_text(const std::vector<Paragraph>& paragraphs,
         if (index + 1 < paragraphs.size()) {
             require_parse_limit(text.size() <= kMaxTextBytes - 2);
             text += "\r\n";
+            if (pending != nullptr) {
+                const LanguageProfile& profile = default_language_profile();
+                pending->unicode_cells.push_back({L'\r', profile.language_id});
+                pending->unicode_cells.push_back({L'\n', profile.language_id});
+            }
         }
         paragraph_format.cp_lim = static_cast<long>(text.size());
         if (pending != nullptr)
@@ -1029,14 +1228,8 @@ void append_rtf_text(std::string& rtf, std::wstring_view text) {
         else if (character >= 0x20 && character <= 0x7e) {
             rtf.push_back(static_cast<char>(character));
         } else {
-            char encoded = '?';
-            WideCharToMultiByte(1252, WC_NO_BEST_FIT_CHARS, &character, 1,
-                                &encoded, 1, "?", nullptr);
-            static constexpr char hex[] = "0123456789abcdef";
-            const unsigned byte = static_cast<unsigned char>(encoded);
-            rtf += "\\'";
-            rtf.push_back(hex[byte >> 4]);
-            rtf.push_back(hex[byte & 0x0f]);
+            const auto unit = static_cast<std::int16_t>(character);
+            rtf += "\\u" + std::to_string(static_cast<int>(unit)) + "?";
         }
     }
 }
@@ -1051,10 +1244,21 @@ std::string paragraphs_to_rtf(const std::vector<Paragraph>& paragraphs) {
             std::find(colors.begin(), colors.end(), run.style.color) == colors.end())
             colors.push_back(run.style.color);
     }
-    std::string rtf = "{\\rtf1\\ansi \\deff0";
+    std::string rtf = "{\\rtf1\\ansi\\ansicpg1252\\uc1 \\deff0";
     rtf += "{\\fonttbl";
     for (std::size_t index = 0; index < fonts.size(); ++index) {
-        rtf += "{\\f" + std::to_string(index) + "\\fnil ";
+        int charset = ANSI_CHARSET;
+        for (const auto& paragraph : paragraphs) {
+            const auto found = std::find_if(
+                paragraph.runs.begin(), paragraph.runs.end(),
+                [&](const TextRun& run) { return run.style.font == fonts[index]; });
+            if (found != paragraph.runs.end()) {
+                charset = found->style.charset;
+                break;
+            }
+        }
+        rtf += "{\\f" + std::to_string(index) + "\\fnil\\fcharset" +
+               std::to_string(charset) + " ";
         append_rtf_text(rtf, fonts[index]);
         rtf += ";}";
     }
@@ -1081,6 +1285,8 @@ std::string paragraphs_to_rtf(const std::vector<Paragraph>& paragraphs) {
             rtf += run.style.underline ? "\\ul" : "\\ulnone";
             rtf += "\\fs" + std::to_string(run.style.half_points);
             rtf += "\\f" + std::to_string(std::distance(fonts.begin(), font));
+            rtf += "\\lang" + std::to_string(
+                profile_for_tag(run.style.language).language_id);
             if (!run.style.auto_color)
                 rtf += "\\cf" + std::to_string(std::distance(colors.begin(), color) + 1);
             rtf.push_back(' ');
@@ -1261,6 +1467,13 @@ RunStyle rich_style_at(HWND rich, LONG position) {
     style.auto_color = (format.dwEffects & CFE_AUTOCOLOR) != 0;
     style.color = format.crTextColor;
     if (format.szFaceName[0] != L'\0') style.font = format.szFaceName;
+    if (format.lcid != 0) {
+        const LanguageProfile& profile = profile_for_language_id(
+            LANGIDFROMLCID(format.lcid));
+        style.language = profile.tag;
+        style.code_page = profile.code_page;
+        style.charset = profile.charset;
+    }
     return style;
 }
 
@@ -1306,25 +1519,99 @@ std::vector<Paragraph> paragraphs_from_rich_edit(RichEditDocument& rich) {
     return paragraphs;
 }
 
-std::string document_xml(const std::vector<Paragraph>& paragraphs) {
+std::string run_text_xml(std::wstring_view text) {
+    std::string xml;
+    std::wstring ordinary;
+    const auto flush = [&]() {
+        if (!ordinary.empty()) {
+            xml += "<w:t xml:space=\"preserve\">" + xml_escape(ordinary) +
+                   "</w:t>";
+            ordinary.clear();
+        }
+    };
+    for (const wchar_t character : text) {
+        if (character == L'\t' || character == L'\n' || character == L'\r' ||
+            character == L'\f') {
+            flush();
+            if (character == L'\t') xml += "<w:tab/>";
+            else if (character == L'\f') xml += "<w:br w:type=\"page\"/>";
+            else if (character == L'\n') xml += "<w:br/>";
+        } else {
+            ordinary.push_back(character);
+        }
+    }
+    flush();
+    return xml;
+}
+
+std::string document_xml(const std::vector<Paragraph>& paragraphs,
+                         const DocumentSettings& settings = {}) {
     std::string xml =
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
         "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
         "<w:body>";
     for (const auto& paragraph : paragraphs) {
         xml += "<w:p>";
+        xml += "<w:pPr>";
         if (paragraph.alignment != PFA_LEFT) {
             const char* value = paragraph.alignment == PFA_CENTER ? "center" :
                 paragraph.alignment == PFA_RIGHT ? "right" : "both";
-            xml += std::string("<w:pPr><w:jc w:val=\"") + value + "\"/></w:pPr>";
+            xml += std::string("<w:jc w:val=\"") + value + "\"/>";
         }
+        if (paragraph.left_indent != 0 || paragraph.right_indent != 0 ||
+            paragraph.first_line_indent != 0) {
+            xml += "<w:ind w:left=\"" +
+                   std::to_string(paragraph.left_indent) + "\" w:right=\"" +
+                   std::to_string(paragraph.right_indent) + "\"";
+            if (paragraph.first_line_indent < 0)
+                xml += " w:hanging=\"" +
+                    std::to_string(-paragraph.first_line_indent) + "\"";
+            else
+                xml += " w:firstLine=\"" +
+                    std::to_string(paragraph.first_line_indent) + "\"";
+            xml += "/>";
+        }
+        if (paragraph.space_before != 0 || paragraph.space_after != 0 ||
+            paragraph.line_spacing != 0) {
+            xml += "<w:spacing w:before=\"" +
+                   std::to_string(paragraph.space_before) +
+                   "\" w:after=\"" + std::to_string(paragraph.space_after) +
+                   "\"";
+            if (paragraph.line_spacing < 0) {
+                xml += " w:line=\"" +
+                       std::to_string(-paragraph.line_spacing) +
+                       "\" w:lineRule=\"exact\"";
+            } else if (paragraph.line_spacing > 0) {
+                xml += " w:line=\"" +
+                       std::to_string(paragraph.line_spacing) +
+                       "\" w:lineRule=\"atLeast\"";
+            }
+            xml += "/>";
+        }
+        if (paragraph.keep_together) xml += "<w:keepLines/>";
+        if (paragraph.keep_with_next) xml += "<w:keepNext/>";
+        if (paragraph.page_break_before) xml += "<w:pageBreakBefore/>";
+        if (paragraph.bottom_border)
+            xml += "<w:pBdr><w:bottom w:val=\"single\" w:sz=\"4\"/></w:pBdr>";
+        xml += "</w:pPr>";
         for (const auto& run : paragraph.runs) {
             xml += "<w:r><w:rPr>";
             if (run.style.bold) xml += "<w:b/>";
             if (run.style.italic) xml += "<w:i/>";
             if (run.style.underline) xml += "<w:u w:val=\"single\"/>";
+            if (run.style.strike) xml += "<w:strike/>";
+            if (run.style.small_caps) xml += "<w:smallCaps/>";
+            if (run.style.all_caps) xml += "<w:caps/>";
+            if (run.style.hidden) xml += "<w:vanish/>";
             xml += "<w:rFonts w:ascii=\"" + xml_escape(run.style.font) +
-                   "\" w:hAnsi=\"" + xml_escape(run.style.font) + "\"/>";
+                   "\" w:hAnsi=\"" + xml_escape(run.style.font) +
+                   "\" w:eastAsia=\"" + xml_escape(run.style.font) +
+                   "\" w:cs=\"" + xml_escape(run.style.font) + "\"/>";
+            if (!run.style.language.empty()) {
+                xml += "<w:lang w:val=\"" + run.style.language +
+                       "\" w:eastAsia=\"" + run.style.language +
+                       "\" w:bidi=\"" + run.style.language + "\"/>";
+            }
             xml += "<w:sz w:val=\"" + std::to_string(run.style.half_points) + "\"/>";
             if (!run.style.auto_color) {
                 char color[7]{};
@@ -1332,14 +1619,23 @@ std::string document_xml(const std::vector<Paragraph>& paragraphs) {
                           GetGValue(run.style.color), GetBValue(run.style.color));
                 xml += std::string("<w:color w:val=\"") + color + "\"/>";
             }
-            xml += "</w:rPr><w:t xml:space=\"preserve\">" +
-                   xml_escape(run.text) + "</w:t></w:r>";
+            xml += "</w:rPr>" + run_text_xml(run.text) + "</w:r>";
         }
         xml += "</w:p>";
     }
-    xml += "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/>"
-           "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\"/>"
-           "</w:sectPr></w:body></w:document>";
+    const int page_width = settings.valid ? settings.page_width : 12240;
+    const int page_height = settings.valid ? settings.page_height : 15840;
+    const int margin_left = settings.valid ? settings.margin_left : 1440;
+    const int margin_right = settings.valid ? settings.margin_right : 1440;
+    const int margin_top = settings.valid ? settings.margin_top : 1440;
+    const int margin_bottom = settings.valid ? settings.margin_bottom : 1440;
+    xml += "<w:sectPr><w:pgSz w:w=\"" + std::to_string(page_width) +
+           "\" w:h=\"" + std::to_string(page_height) +
+           "\"/><w:pgMar w:top=\"" + std::to_string(margin_top) +
+           "\" w:right=\"" + std::to_string(margin_right) +
+           "\" w:bottom=\"" + std::to_string(margin_bottom) +
+           "\" w:left=\"" + std::to_string(margin_left) +
+           "\"/></w:sectPr></w:body></w:document>";
     return xml;
 }
 
@@ -1371,7 +1667,8 @@ bool add_relationship(IOpcRelationshipSet* set, IOpcFactory* factory,
                                              &relationship));
 }
 
-bool write_docx(const std::wstring& path, const std::vector<Paragraph>& paragraphs) {
+bool write_docx(const std::wstring& path, const std::vector<Paragraph>& paragraphs,
+                const DocumentSettings& settings = {}) {
     ComApartment apartment;
     if (!apartment.usable()) return false;
     ComPtr<IOpcFactory> factory;
@@ -1387,14 +1684,14 @@ bool write_docx(const std::wstring& path, const std::vector<Paragraph>& paragrap
         FAILED(package->GetPartSet(&parts)) ||
         !add_part(factory.Get(), parts.Get(), L"/word/document.xml",
                   L"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
-                  document_xml(paragraphs), &main_part)) return false;
+                  document_xml(paragraphs, settings), &main_part)) return false;
 
     const std::string styles =
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
         "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
         "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">"
         "<w:name w:val=\"Normal\"/><w:qFormat/></w:style></w:styles>";
-    const std::string settings =
+    const std::string settings_xml =
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
         "<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"/>";
     const std::string core =
@@ -1409,7 +1706,7 @@ bool write_docx(const std::wstring& path, const std::vector<Paragraph>& paragrap
     if (!add_part(factory.Get(), parts.Get(), L"/word/styles.xml",
                   L"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml", styles) ||
         !add_part(factory.Get(), parts.Get(), L"/word/settings.xml",
-                  L"application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml", settings) ||
+                  L"application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml", settings_xml) ||
         !add_part(factory.Get(), parts.Get(), L"/docProps/core.xml",
                   L"application/vnd.openxmlformats-package.core-properties+xml", core) ||
         !add_part(factory.Get(), parts.Get(), L"/docProps/app.xml",
@@ -1517,6 +1814,150 @@ int pdf_font_resource(const RunStyle& style) {
     return family * 4 + face + 1;
 }
 
+bool pdf_needs_unicode_font(const std::vector<Paragraph>& paragraphs) {
+    for (const Paragraph& paragraph : paragraphs) {
+        for (const TextRun& run : paragraph.runs) {
+            for (const wchar_t character : run.text) {
+                if (character > 0xff) return true;
+            }
+        }
+    }
+    return false;
+}
+
+std::wstring pdf_unicode_font_name(const std::vector<Paragraph>& paragraphs) {
+    for (const Paragraph& paragraph : paragraphs) {
+        for (const TextRun& run : paragraph.runs) {
+            for (std::size_t index = 0; index < run.text.size();) {
+                const std::uint32_t scalar = scalar_at(run.text, index);
+                const LanguageProfile& profile = profile_for_scalar(scalar);
+                if (profile.code_page == 932) return L"Yu Gothic UI";
+                if (profile.code_page == 936) return L"Microsoft YaHei UI";
+                if (profile.code_page == 950) return L"Microsoft JhengHei UI";
+                if (profile.code_page == 949) return L"Malgun Gothic";
+                if (scalar > 0xffff) return L"Segoe UI Symbol";
+            }
+        }
+    }
+    return L"Segoe UI";
+}
+
+std::string pdf_font_identifier(std::wstring_view value) {
+    std::string identifier;
+    for (const wchar_t character : value) {
+        if ((character >= L'A' && character <= L'Z') ||
+            (character >= L'a' && character <= L'z') ||
+            (character >= L'0' && character <= L'9'))
+            identifier.push_back(static_cast<char>(character));
+    }
+    return identifier.empty() ? "SegoeUI" : identifier;
+}
+
+struct PdfUnicodeFont {
+    HDC dc = nullptr;
+    HFONT font = nullptr;
+    HGDIOBJ previous = nullptr;
+    std::wstring face;
+    std::vector<unsigned char> file;
+    std::map<WORD, std::wstring> unicode_by_glyph;
+    TEXTMETRICW metrics{};
+
+    ~PdfUnicodeFont() {
+        if (dc != nullptr && previous != nullptr) SelectObject(dc, previous);
+        if (font != nullptr) DeleteObject(font);
+        if (dc != nullptr) DeleteDC(dc);
+    }
+
+    bool initialize(const std::wstring& requested) {
+        face = requested;
+        dc = CreateCompatibleDC(nullptr);
+        if (dc == nullptr) return false;
+        font = CreateFontW(-1000, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                           DEFAULT_CHARSET, OUT_TT_ONLY_PRECIS,
+                           CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                           DEFAULT_PITCH | FF_DONTCARE, face.c_str());
+        if (font == nullptr) return false;
+        previous = SelectObject(dc, font);
+        if (previous == nullptr || !GetTextMetricsW(dc, &metrics)) return false;
+        wchar_t actual[LF_FACESIZE]{};
+        if (GetTextFaceW(dc, static_cast<int>(std::size(actual)), actual) > 0)
+            face = actual;
+        const DWORD size = GetFontData(dc, 0, 0, nullptr, 0);
+        if (size == GDI_ERROR || size == 0 || size > kMaxGeneratedBytes)
+            return false;
+        file.resize(size);
+        return GetFontData(dc, 0, 0, file.data(), size) != GDI_ERROR;
+    }
+
+    WORD glyph(std::wstring_view characters) {
+        WORD glyphs[2]{0xffff, 0xffff};
+        const int count = (std::min)(2, static_cast<int>(characters.size()));
+        if (count <= 0 || GetGlyphIndicesW(dc, characters.data(), count,
+                                           glyphs, GGI_MARK_NONEXISTING_GLYPHS) ==
+                              GDI_ERROR) return 0;
+        WORD selected = glyphs[0] == 0xffff ? 0 : glyphs[0];
+        if (selected == 0 && count == 2 && glyphs[1] != 0xffff)
+            selected = glyphs[1];
+        unicode_by_glyph[selected] = std::wstring(characters);
+        return selected;
+    }
+};
+
+std::string pdf_hex_word(const WORD value) {
+    static constexpr char digits[] = "0123456789ABCDEF";
+    std::string result(4, '0');
+    result[0] = digits[(value >> 12) & 0xf];
+    result[1] = digits[(value >> 8) & 0xf];
+    result[2] = digits[(value >> 4) & 0xf];
+    result[3] = digits[value & 0xf];
+    return result;
+}
+
+std::string pdf_hex_utf16(std::wstring_view value) {
+    std::string result;
+    for (const wchar_t character : value)
+        result += pdf_hex_word(static_cast<WORD>(character));
+    return result;
+}
+
+std::string pdf_unicode_encoded_text(std::wstring_view text,
+                                     PdfUnicodeFont& font) {
+    std::string encoded = "<";
+    for (std::size_t index = 0; index < text.size();) {
+        const std::size_t first = index;
+        const std::uint32_t scalar = scalar_at(text, index);
+        (void)scalar;
+        const std::wstring_view characters = text.substr(first, index - first);
+        encoded += pdf_hex_word(font.glyph(characters));
+    }
+    encoded += ">";
+    return encoded;
+}
+
+std::string pdf_to_unicode_cmap(const PdfUnicodeFont& font) {
+    std::string cmap =
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+        "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+        "/CMapName /Word1Unicode def\n/CMapType 2 def\n"
+        "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n";
+    auto current = font.unicode_by_glyph.begin();
+    while (current != font.unicode_by_glyph.end()) {
+        const std::size_t count = (std::min)(
+            static_cast<std::size_t>(100),
+            static_cast<std::size_t>(std::distance(
+                current, font.unicode_by_glyph.end())));
+        cmap += std::to_string(count) + " beginbfchar\n";
+        for (std::size_t index = 0; index < count; ++index, ++current) {
+            cmap += "<" + pdf_hex_word(current->first) + "> <" +
+                    pdf_hex_utf16(current->second) + ">\n";
+        }
+        cmap += "endbfchar\n";
+    }
+    cmap += "endcmap\nCMapName currentdict /CMap defineresource pop\n"
+            "end\nend\n";
+    return cmap;
+}
+
 std::string pdf_encoded_text(std::wstring_view text) {
     std::string encoded;
     for (const wchar_t character : text) {
@@ -1535,7 +1976,7 @@ std::string pdf_encoded_text(std::wstring_view text) {
 }
 
 void append_pdf_line(std::string& content, const PdfLine& line,
-                     const double baseline) {
+                     const double baseline, PdfUnicodeFont* unicode_font) {
     double x = line.left;
     if (line.alignment == PFA_CENTER) {
         x += ((std::max)(0.0, line.writable_width - line.width)) / 2.0;
@@ -1552,11 +1993,17 @@ void append_pdf_line(std::string& content, const PdfLine& line,
         const double red = static_cast<double>(GetRValue(color)) / 255.0;
         const double green = static_cast<double>(GetGValue(color)) / 255.0;
         const double blue = static_cast<double>(GetBValue(color)) / 255.0;
-        content += "/F" + std::to_string(pdf_font_resource(run.style)) + " " +
-                   pdf_number(font_size) + " Tf\n";
+        const bool unicode = unicode_font != nullptr &&
+            std::any_of(run.text.begin(), run.text.end(),
+                        [](const wchar_t character) { return character > 0xff; });
+        content += unicode ? "/FU " :
+            "/F" + std::to_string(pdf_font_resource(run.style)) + " ";
+        content += pdf_number(font_size) + " Tf\n";
         content += pdf_number(red) + " " + pdf_number(green) + " " +
-                   pdf_number(blue) + " rg\n(" +
-                   pdf_encoded_text(run.text) + ") Tj\n";
+                   pdf_number(blue) + " rg\n";
+        content += unicode ? pdf_unicode_encoded_text(run.text, *unicode_font) :
+            "(" + pdf_encoded_text(run.text) + ")";
+        content += " Tj\n";
         if (run.style.underline && run.width > 0.0) {
             const double underline_y = baseline - (std::max)(1.0, font_size / 12.0);
             underlines += "q\n" + pdf_number(red) + " " + pdf_number(green) +
@@ -1574,7 +2021,7 @@ void append_pdf_line(std::string& content, const PdfLine& line,
 
 std::vector<std::string> pdf_page_contents(
     const std::vector<Paragraph>& paragraphs,
-    const DocumentSettings& settings) {
+    const DocumentSettings& settings, PdfUnicodeFont* unicode_font) {
     const double page_width = settings.valid ?
         static_cast<double>(settings.page_width) / 20.0 : 612.0;
     const double page_height = settings.valid ?
@@ -1634,7 +2081,7 @@ std::vector<std::string> pdf_page_contents(
             }
             if (cursor - line_height < bottom) begin_new_page();
             const double baseline = cursor - largest_font;
-            append_pdf_line(pages.back(), line, baseline);
+            append_pdf_line(pages.back(), line, baseline, unicode_font);
             cursor -= line_height;
             first_visual_line = false;
             line = PdfLine{};
@@ -1722,8 +2169,13 @@ bool write_pdf(const std::wstring& path,
         "Helvetica-BoldOblique", "Times-Roman", "Times-Bold",
         "Times-Italic", "Times-BoldItalic", "Courier", "Courier-Bold",
         "Courier-Oblique", "Courier-BoldOblique"};
+    PdfUnicodeFont embedded_unicode;
+    PdfUnicodeFont* unicode_font = nullptr;
+    if (pdf_needs_unicode_font(paragraphs) &&
+        embedded_unicode.initialize(pdf_unicode_font_name(paragraphs)))
+        unicode_font = &embedded_unicode;
     const std::vector<std::string> contents =
-        pdf_page_contents(paragraphs, settings);
+        pdf_page_contents(paragraphs, settings, unicode_font);
     const double page_width = settings.valid ?
         static_cast<double>(settings.page_width) / 20.0 : 612.0;
     const double page_height = settings.valid ?
@@ -1731,8 +2183,14 @@ bool write_pdf(const std::wstring& path,
     constexpr int catalog_object = 1;
     constexpr int pages_object = 2;
     constexpr int first_font_object = 3;
-    constexpr int first_page_object = first_font_object +
-                                      static_cast<int>(font_names.size());
+    const int unicode_font_object = first_font_object +
+                                    static_cast<int>(font_names.size());
+    const int unicode_cid_font_object = unicode_font_object + 1;
+    const int unicode_descriptor_object = unicode_font_object + 2;
+    const int unicode_file_object = unicode_font_object + 3;
+    const int unicode_cmap_object = unicode_font_object + 4;
+    const int first_page_object = unicode_font == nullptr ?
+        unicode_font_object : unicode_cmap_object + 1;
     const int object_count = first_page_object - 1 +
                              static_cast<int>(contents.size()) * 2;
     std::vector<std::string> objects(static_cast<std::size_t>(object_count + 1));
@@ -1750,6 +2208,50 @@ bool write_pdf(const std::wstring& path,
             "<< /Type /Font /Subtype /Type1 /BaseFont /" +
             std::string(font_names[index]) + " /Encoding /WinAnsiEncoding >>";
     }
+    if (unicode_font != nullptr) {
+        const std::string base_font = pdf_font_identifier(unicode_font->face);
+        const int ascent = unicode_font->metrics.tmAscent;
+        const int descent = -unicode_font->metrics.tmDescent;
+        const int height = (std::max)(1L, unicode_font->metrics.tmHeight);
+        const auto scaled = [height](const int value) {
+            return static_cast<int>((static_cast<long long>(value) * 1000) /
+                                    height);
+        };
+        const int scaled_ascent = scaled(ascent);
+        const int scaled_descent = scaled(descent);
+        objects[unicode_font_object] =
+            "<< /Type /Font /Subtype /Type0 /BaseFont /" + base_font +
+            " /Encoding /Identity-H /DescendantFonts [" +
+            std::to_string(unicode_cid_font_object) +
+            " 0 R] /ToUnicode " + std::to_string(unicode_cmap_object) +
+            " 0 R >>";
+        objects[unicode_cid_font_object] =
+            "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /" + base_font +
+            " /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) "
+            "/Supplement 0 >> /FontDescriptor " +
+            std::to_string(unicode_descriptor_object) +
+            " 0 R /DW 1000 /CIDToGIDMap /Identity >>";
+        objects[unicode_descriptor_object] =
+            "<< /Type /FontDescriptor /FontName /" + base_font +
+            " /Flags 32 /FontBBox [-1000 " +
+            std::to_string(scaled_descent) + " 3000 " +
+            std::to_string(scaled_ascent + 500) + "] /ItalicAngle 0 "
+            "/Ascent " + std::to_string(scaled_ascent) + " /Descent " +
+            std::to_string(scaled_descent) + " /CapHeight " +
+            std::to_string(scaled_ascent) + " /StemV 80 /FontFile2 " +
+            std::to_string(unicode_file_object) + " 0 R >>";
+        objects[unicode_file_object] =
+            "<< /Length " + std::to_string(unicode_font->file.size()) +
+            " /Length1 " + std::to_string(unicode_font->file.size()) +
+            " >>\nstream\n" +
+            std::string(reinterpret_cast<const char*>(unicode_font->file.data()),
+                        unicode_font->file.size()) +
+            "\nendstream";
+        const std::string cmap = pdf_to_unicode_cmap(*unicode_font);
+        objects[unicode_cmap_object] =
+            "<< /Length " + std::to_string(cmap.size()) +
+            " >>\nstream\n" + cmap + "endstream";
+    }
 
     std::string resources = "<< /Font << ";
     for (std::size_t index = 0; index < font_names.size(); ++index) {
@@ -1757,6 +2259,8 @@ bool write_pdf(const std::wstring& path,
                      std::to_string(first_font_object +
                                     static_cast<int>(index)) + " 0 R ";
     }
+    if (unicode_font != nullptr)
+        resources += "/FU " + std::to_string(unicode_font_object) + " 0 R ";
     resources += ">> >>";
     for (std::size_t index = 0; index < contents.size(); ++index) {
         const int page_object = first_page_object + static_cast<int>(index) * 2;
@@ -1939,7 +2443,8 @@ extern "C" int OpusModernGetPendingDocxRun(
     const int index, long* cp_first, long* cp_lim, int* bold, int* italic,
     int* underline, int* strike, int* small_caps, int* all_caps, int* hidden,
     int* half_points, int* color_index, char* font,
-    const int font_capacity) try {
+    const int font_capacity, int* charset, char* language,
+    const int language_capacity) try {
     if (index < 0 || static_cast<std::size_t>(index) >=
                          pending_docx_import.runs.size()) return false;
     const PendingRunFormat& record = pending_docx_import.runs[index];
@@ -1958,9 +2463,13 @@ extern "C" int OpusModernGetPendingDocxRun(
         const std::string ansi_font = wide_to_ansi(record.style.font);
         lstrcpynA(font, ansi_font.c_str(), font_capacity);
     }
+    if (charset != nullptr) *charset = record.style.charset;
+    if (language != nullptr && language_capacity > 0)
+        lstrcpynA(language, record.style.language.c_str(), language_capacity);
     return true;
 } catch (...) {
     if (font != nullptr && font_capacity > 0) font[0] = '\0';
+    if (language != nullptr && language_capacity > 0) language[0] = '\0';
     return false;
 }
 
@@ -1998,6 +2507,376 @@ extern "C" int OpusModernGetPendingDocxParagraph(
 
 extern "C" void OpusModernClearPendingDocxFormatting() {
     pending_docx_import = {};
+}
+
+extern "C" int OpusModernBindPendingDocxUnicode(const int doc) try {
+    if (doc < 0 || pending_docx_import.unicode_cells.size() > kMaxTextBytes)
+        return false;
+    unicode_documents[doc].cells = pending_docx_import.unicode_cells;
+    return true;
+} catch (...) {
+    return false;
+}
+
+extern "C" void OpusUnicodeForgetDocument(const int doc) {
+    unicode_documents.erase(doc);
+}
+
+extern "C" unsigned int OpusUnicodeScalarAt(const int doc, const long cp) {
+    if (cp < 0) return 0;
+    const auto found = unicode_documents.find(doc);
+    if (found == unicode_documents.end() ||
+        static_cast<std::size_t>(cp) >= found->second.cells.size()) return 0;
+    return found->second.cells[static_cast<std::size_t>(cp)].scalar;
+}
+
+extern "C" unsigned int OpusUnicodeLanguageAt(const int doc, const long cp) {
+    if (cp < 0) return 0;
+    const auto found = unicode_documents.find(doc);
+    if (found == unicode_documents.end() ||
+        static_cast<std::size_t>(cp) >= found->second.cells.size()) return 0;
+    return found->second.cells[static_cast<std::size_t>(cp)].language;
+}
+
+extern "C" int OpusUnicodeHasRange(
+    const int doc, const long cp_first, const int length) {
+    if (cp_first < 0 || length <= 0) return false;
+    const auto found = unicode_documents.find(doc);
+    if (found == unicode_documents.end()) return false;
+    const std::vector<UnicodeCell>& cells = found->second.cells;
+    const std::size_t first = static_cast<std::size_t>(cp_first);
+    if (first >= cells.size()) return false;
+    const std::size_t count = (std::min)(
+        static_cast<std::size_t>(length), cells.size() - first);
+    return std::any_of(
+        cells.begin() + static_cast<std::ptrdiff_t>(first),
+        cells.begin() + static_cast<std::ptrdiff_t>(first + count),
+        [](const UnicodeCell& cell) { return cell.scalar != 0; });
+}
+
+extern "C" void OpusUnicodeOnReplace(
+    const int doc, const long cp_first, const long cp_lim,
+    const long inserted_count) try {
+    if (cp_first < 0 || cp_lim < cp_first || inserted_count < 0 ||
+        inserted_count > static_cast<long>(kMaxTextBytes)) return;
+    const auto found = unicode_documents.find(doc);
+    if (found == unicode_documents.end()) return;
+    std::vector<UnicodeCell>& cells = found->second.cells;
+    const std::size_t first = (std::min)(
+        static_cast<std::size_t>(cp_first), cells.size());
+    const std::size_t limit = (std::min)(
+        static_cast<std::size_t>(cp_lim), cells.size());
+    if (cells.size() - (limit - first) +
+            static_cast<std::size_t>(inserted_count) > kMaxTextBytes) return;
+    cells.erase(cells.begin() + static_cast<std::ptrdiff_t>(first),
+                cells.begin() + static_cast<std::ptrdiff_t>(limit));
+    cells.insert(cells.begin() + static_cast<std::ptrdiff_t>(first),
+                 static_cast<std::size_t>(inserted_count), UnicodeCell{});
+} catch (...) {
+}
+
+extern "C" void OpusUnicodeOnReplaceCps(
+    const int destination_doc, const long destination_first,
+    const long destination_lim, const int source_doc,
+    const long source_first, const long source_lim) try {
+    if (destination_first < 0 || destination_lim < destination_first ||
+        source_first < 0 || source_lim < source_first) return;
+    const auto source = unicode_documents.find(source_doc);
+    const auto destination = unicode_documents.find(destination_doc);
+    if (source == unicode_documents.end() &&
+        destination == unicode_documents.end()) return;
+    const std::size_t requested = static_cast<std::size_t>(
+        source_lim - source_first);
+    if (requested > kMaxTextBytes) return;
+    std::vector<UnicodeCell> copied(requested);
+    if (source != unicode_documents.end()) {
+        const std::vector<UnicodeCell>& source_cells = source->second.cells;
+        const std::size_t first = (std::min)(
+            static_cast<std::size_t>(source_first), source_cells.size());
+        const std::size_t available = (std::min)(
+            requested, source_cells.size() - first);
+        std::copy_n(source_cells.begin() + static_cast<std::ptrdiff_t>(first),
+                    available, copied.begin());
+    }
+    std::vector<UnicodeCell>& cells = unicode_documents[destination_doc].cells;
+    if (static_cast<std::size_t>(destination_first) > cells.size()) {
+        if (static_cast<std::size_t>(destination_first) > kMaxTextBytes) return;
+        cells.resize(static_cast<std::size_t>(destination_first));
+    }
+    const std::size_t first = static_cast<std::size_t>(destination_first);
+    const std::size_t limit = (std::min)(
+        static_cast<std::size_t>(destination_lim), cells.size());
+    if (cells.size() - (limit - first) + copied.size() > kMaxTextBytes) return;
+    cells.erase(cells.begin() + static_cast<std::ptrdiff_t>(first),
+                cells.begin() + static_cast<std::ptrdiff_t>(limit));
+    cells.insert(cells.begin() + static_cast<std::ptrdiff_t>(first),
+                 copied.begin(), copied.end());
+} catch (...) {
+}
+
+const LanguageProfile& active_input_profile() {
+    if (input_language != "auto") return profile_for_tag(input_language);
+    const LANGID language = LOWORD(reinterpret_cast<ULONG_PTR>(
+        GetKeyboardLayout(0)));
+    return profile_for_language_id(language);
+}
+
+extern "C" int OpusUnicodeSetInputLanguage(const char* language) {
+    if (language == nullptr || *language == '\0' ||
+        _stricmp(language, "auto") == 0) {
+        input_language = "auto";
+        return true;
+    }
+    const LanguageProfile& profile = profile_for_tag(language);
+    input_language = profile.tag;
+    return true;
+}
+
+extern "C" int OpusUnicodeGetInputLanguage(char* language,
+                                             const int capacity) {
+    if (language == nullptr || capacity <= 0) return false;
+    const std::string value = input_language == "auto" ? "auto" :
+        active_input_profile().tag;
+    lstrcpynA(language, value.c_str(), capacity);
+    return true;
+}
+
+extern "C" int OpusUnicodeLegacyByteForScalar(const unsigned int scalar) {
+    const LanguageProfile& selected = input_language == "auto" ?
+        profile_for_scalar(scalar) : active_input_profile();
+    return static_cast<unsigned char>(legacy_byte_for_scalar(scalar, selected));
+}
+
+extern "C" int OpusUnicodeSetScalar(const int doc, const long cp,
+                                      const unsigned int scalar) try {
+    if (doc < 0 || cp < 0 || static_cast<std::size_t>(cp) >= kMaxTextBytes ||
+        scalar == 0 || scalar > 0x10ffff ||
+        (scalar >= 0xd800 && scalar <= 0xdfff)) return false;
+    std::vector<UnicodeCell>& cells = unicode_documents[doc].cells;
+    if (cells.size() <= static_cast<std::size_t>(cp))
+        cells.resize(static_cast<std::size_t>(cp) + 1);
+    const LanguageProfile& profile = input_language == "auto" ?
+        profile_for_scalar(scalar) : active_input_profile();
+    cells[static_cast<std::size_t>(cp)] = {scalar, profile.language_id};
+    return true;
+} catch (...) {
+    return false;
+}
+
+int code_page_for_charset(const int charset) {
+    switch (charset) {
+        case EASTEUROPE_CHARSET: return 1250;
+        case RUSSIAN_CHARSET: return 1251;
+        case GREEK_CHARSET: return 1253;
+        case TURKISH_CHARSET: return 1254;
+        case HEBREW_CHARSET: return 1255;
+        case ARABIC_CHARSET: return 1256;
+        case BALTIC_CHARSET: return 1257;
+        case VIETNAMESE_CHARSET: return 1258;
+        case THAI_CHARSET: return 874;
+        case SHIFTJIS_CHARSET: return 932;
+        case GB2312_CHARSET: return 936;
+        case HANGEUL_CHARSET: return 949;
+        case CHINESEBIG5_CHARSET: return 950;
+        default: return 1252;
+    }
+}
+
+std::uint32_t decode_legacy_byte(const unsigned char byte,
+                                 const int code_page) {
+    wchar_t decoded = 0;
+    if (byte < 0x80) return byte;
+    if (MultiByteToWideChar(code_page, 0,
+                            reinterpret_cast<const char*>(&byte), 1,
+                            &decoded, 1) == 1) return decoded;
+    return 0xfffd;
+}
+
+extern "C" int OpusUnicodeTextToUtf8(
+    const int doc, const long cp_first, const char* bytes, const int length,
+    const int charset, char* output, const int capacity) try {
+    if (cp_first < 0 || bytes == nullptr || length < 0 || capacity < 0 ||
+        static_cast<std::size_t>(length) > kMaxTextBytes) return -1;
+    std::wstring wide;
+    wide.reserve(static_cast<std::size_t>(length));
+    const int code_page = code_page_for_charset(charset);
+    for (int index = 0; index < length; ++index) {
+        std::uint32_t scalar = OpusUnicodeScalarAt(doc, cp_first + index);
+        if (scalar == 0) scalar = decode_legacy_byte(
+            static_cast<unsigned char>(bytes[index]), code_page);
+        wide += scalar_to_wide(scalar);
+    }
+    const std::string utf8 = wide_to_utf8(wide);
+    if (utf8.size() >= static_cast<std::size_t>(capacity)) return -1;
+    if (output != nullptr && capacity > 0) {
+        std::memcpy(output, utf8.data(), utf8.size());
+        output[utf8.size()] = '\0';
+    }
+    return static_cast<int>(utf8.size());
+} catch (...) {
+    return -1;
+}
+
+extern "C" int OpusUnicodeLanguageTagAt(
+    const int doc, const long cp, char* language, const int capacity) {
+    if (language == nullptr || capacity <= 0) return false;
+    const LANGID language_id = static_cast<LANGID>(
+        OpusUnicodeLanguageAt(doc, cp));
+    const LanguageProfile& profile = language_id != 0 ?
+        profile_for_language_id(language_id) : default_language_profile();
+    lstrcpynA(language, profile.tag, capacity);
+    return true;
+}
+
+extern "C" int OpusUnicodeClipboardToLegacy(
+    HANDLE unicode_handle, HANDLE* legacy_handle) try {
+    if (legacy_handle == nullptr) return false;
+    *legacy_handle = nullptr;
+    pending_clipboard_cells.clear();
+    if (unicode_handle == nullptr) return false;
+    const SIZE_T bytes = GlobalSize(unicode_handle);
+    if (bytes < sizeof(wchar_t) || bytes > kMaxTextBytes * sizeof(wchar_t))
+        return false;
+    const auto* source = static_cast<const wchar_t*>(GlobalLock(unicode_handle));
+    if (source == nullptr) return false;
+    const std::size_t capacity = bytes / sizeof(wchar_t);
+    std::size_t length = 0;
+    while (length < capacity && source[length] != L'\0') ++length;
+    if (length == capacity) {
+        GlobalUnlock(unicode_handle);
+        return false;
+    }
+    std::string legacy;
+    legacy.reserve(length + 1);
+    pending_clipboard_cells.reserve(length);
+    const std::wstring_view text(source, length);
+    for (std::size_t index = 0; index < text.size();) {
+        const std::uint32_t scalar = scalar_at(text, index);
+        const LanguageProfile& profile = input_language == "auto" ?
+            profile_for_scalar(scalar) : active_input_profile();
+        append_legacy_scalar(legacy, &pending_clipboard_cells,
+                             scalar, profile);
+    }
+    GlobalUnlock(unicode_handle);
+    if (legacy.size() >= 0x10000 || legacy.size() > kMaxTextBytes) {
+        pending_clipboard_cells.clear();
+        return false;
+    }
+    HANDLE converted = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT,
+                                   legacy.size() + 1);
+    if (converted == nullptr) {
+        pending_clipboard_cells.clear();
+        return false;
+    }
+    void* destination = GlobalLock(converted);
+    if (destination == nullptr) {
+        GlobalFree(converted);
+        pending_clipboard_cells.clear();
+        return false;
+    }
+    if (!legacy.empty()) std::memcpy(destination, legacy.data(), legacy.size());
+    GlobalUnlock(converted);
+    *legacy_handle = converted;
+    return true;
+} catch (...) {
+    pending_clipboard_cells.clear();
+    return false;
+}
+
+extern "C" HANDLE OpusUnicodeCreateClipboardHandle(
+    const int doc, const long cp_first, HANDLE legacy_handle) try {
+    if (cp_first < 0 || legacy_handle == nullptr) return nullptr;
+    const SIZE_T bytes = GlobalSize(legacy_handle);
+    if (bytes == 0 || bytes > kMaxTextBytes) return nullptr;
+    const auto* source = static_cast<const char*>(GlobalLock(legacy_handle));
+    if (source == nullptr) return nullptr;
+    std::size_t length = 0;
+    while (length < bytes && source[length] != '\0') ++length;
+    if (length == bytes) {
+        GlobalUnlock(legacy_handle);
+        return nullptr;
+    }
+    std::wstring wide;
+    wide.reserve(length);
+    for (std::size_t index = 0; index < length; ++index) {
+        std::uint32_t scalar = OpusUnicodeScalarAt(
+            doc, cp_first + static_cast<long>(index));
+        if (scalar == 0) scalar = decode_legacy_byte(
+            static_cast<unsigned char>(source[index]), 1252);
+        wide += scalar_to_wide(scalar);
+    }
+    GlobalUnlock(legacy_handle);
+    if (wide.size() > (kMaxTextBytes / sizeof(wchar_t)) - 1) return nullptr;
+    HANDLE result = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT,
+                                (wide.size() + 1) * sizeof(wchar_t));
+    if (result == nullptr) return nullptr;
+    void* destination = GlobalLock(result);
+    if (destination == nullptr) {
+        GlobalFree(result);
+        return nullptr;
+    }
+    if (!wide.empty())
+        std::memcpy(destination, wide.data(), wide.size() * sizeof(wchar_t));
+    GlobalUnlock(result);
+    return result;
+} catch (...) {
+    return nullptr;
+}
+
+extern "C" int OpusUnicodeBindPendingClipboard(const int doc) try {
+    if (doc < 0 || pending_clipboard_cells.size() > kMaxTextBytes) return false;
+    unicode_documents[doc].cells = pending_clipboard_cells;
+    pending_clipboard_cells.clear();
+    return true;
+} catch (...) {
+    pending_clipboard_cells.clear();
+    return false;
+}
+
+extern "C" BOOL OpusUnicodeExtTextOut(
+    HDC dc, const int x, const int y, const UINT options, const RECT* rectangle,
+    const int doc, const long cp_first, const char* bytes, const UINT length,
+    const int* advances) try {
+    if (dc == nullptr || bytes == nullptr || length == 0)
+        return ExtTextOutA(dc, x, y, options, rectangle, bytes, length, advances);
+    const auto found = unicode_documents.find(doc);
+    bool has_unicode = false;
+    if (found != unicode_documents.end() && cp_first >= 0) {
+        const std::vector<UnicodeCell>& cells = found->second.cells;
+        const std::size_t first = static_cast<std::size_t>(cp_first);
+        if (first < cells.size()) {
+            const std::size_t count = (std::min)(
+                static_cast<std::size_t>(length), cells.size() - first);
+            has_unicode = std::any_of(
+                cells.begin() + static_cast<std::ptrdiff_t>(first),
+                cells.begin() + static_cast<std::ptrdiff_t>(first + count),
+                [](const UnicodeCell& cell) { return cell.scalar != 0; });
+        }
+    }
+    if (!has_unicode)
+        return ExtTextOutA(dc, x, y, options, rectangle, bytes, length, advances);
+
+    const int code_page = code_page_for_charset(GetTextCharset(dc));
+    std::wstring wide;
+    std::vector<int> wide_advances;
+    wide.reserve(length);
+    if (advances != nullptr) wide_advances.reserve(length);
+    for (UINT index = 0; index < length; ++index) {
+        std::uint32_t scalar = OpusUnicodeScalarAt(doc, cp_first + index);
+        if (scalar == 0) scalar = decode_legacy_byte(
+            static_cast<unsigned char>(bytes[index]), code_page);
+        const std::wstring encoded = scalar_to_wide(scalar);
+        wide += encoded;
+        if (advances != nullptr) {
+            wide_advances.push_back(advances[index]);
+            if (encoded.size() == 2) wide_advances.push_back(0);
+        }
+    }
+    return ExtTextOutW(dc, x, y, options, rectangle, wide.data(),
+                       static_cast<UINT>(wide.size()),
+                       advances != nullptr ? wide_advances.data() : nullptr);
+} catch (...) {
+    return ExtTextOutA(dc, x, y, options, rectangle, bytes, length, advances);
 }
 
 extern "C" int OpusPdfSnapshotBegin(
@@ -2107,12 +2986,80 @@ extern "C" int OpusPdfSnapshotAddRun(
     return false;
 }
 
+extern "C" int OpusPdfSnapshotAddRunUtf8(
+    const char* text, const int length, const char* font,
+    const int half_points, const int bold, const int italic,
+    const int underline, const int strike, const int small_caps,
+    const int all_caps, const int hidden, const int color_index,
+    const char* language, const int charset) try {
+    if (text == nullptr || length < 0 ||
+        static_cast<std::size_t>(length) > kMaxTextBytes ||
+        pending_pdf_export.paragraphs.empty() ||
+        pending_pdf_export.run_count >= kMaxRuns ||
+        static_cast<std::size_t>(length) >
+            kMaxTextBytes - pending_pdf_export.text_bytes) return false;
+    RunStyle style;
+    style.bold = bold != 0;
+    style.italic = italic != 0;
+    style.underline = underline != 0;
+    style.strike = strike != 0;
+    style.small_caps = small_caps != 0;
+    style.all_caps = all_caps != 0;
+    style.hidden = hidden != 0;
+    style.half_points = half_points >= 8 && half_points <= 254 ?
+        half_points : 20;
+    if (font != nullptr && *font != '\0') {
+        const std::size_t font_length = strnlen_s(font, 256);
+        if (font_length == 256) return false;
+        style.font = ansi_to_wide(std::string_view(font, font_length));
+    }
+    if (language != nullptr && *language != '\0') {
+        const std::size_t language_length = strnlen_s(language, 32);
+        if (language_length == 32) return false;
+        const LanguageProfile& profile = profile_for_tag(
+            std::string_view(language, language_length));
+        style.language = profile.tag;
+        style.code_page = profile.code_page;
+        style.charset = charset >= 0 && charset <= 255 ? charset :
+            profile.charset;
+    }
+    apply_legacy_color(color_index, style);
+    std::wstring run_text = utf8_to_wide(
+        std::string_view(text, static_cast<std::size_t>(length)));
+    if (style.all_caps || style.small_caps) {
+        for (wchar_t& character : run_text)
+            character = static_cast<wchar_t>(std::towupper(character));
+    }
+    if (style.small_caps && !style.all_caps)
+        style.half_points = (std::max)(8, style.half_points * 4 / 5);
+    pending_pdf_export.paragraphs.back().runs.push_back(
+        {style, std::move(run_text)});
+    ++pending_pdf_export.run_count;
+    pending_pdf_export.text_bytes += static_cast<std::size_t>(length);
+    return true;
+} catch (...) {
+    return false;
+}
+
 extern "C" int OpusPdfSnapshotExportDialog(HWND owner) try {
     if (pending_pdf_export.paragraphs.empty()) return false;
     const int result = export_paragraphs_to_pdf_dialog(
         owner, pending_pdf_export.paragraphs, pending_pdf_export.settings);
     pending_pdf_export = {};
     return result;
+} catch (...) {
+    pending_pdf_export = {};
+    return false;
+}
+
+extern "C" int OpusDocxSnapshotExportPath(const char* path) try {
+    if (path == nullptr || *path == '\0' ||
+        pending_pdf_export.paragraphs.empty()) return false;
+    const bool written = write_docx(
+        wide_path(path), pending_pdf_export.paragraphs,
+        pending_pdf_export.settings);
+    pending_pdf_export = {};
+    return written;
 } catch (...) {
     pending_pdf_export = {};
     return false;

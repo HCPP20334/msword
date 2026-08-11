@@ -91,6 +91,7 @@ extern int OpusModernPendingDocxParagraphCount();
 extern int OpusModernGetPendingDocxRun();
 extern int OpusModernGetPendingDocxParagraph();
 extern int OpusModernGetPendingDocxPage();
+extern int OpusModernBindPendingDocxUnicode();
 extern void OpusModernClearPendingDocxFormatting();
 extern int OpusX64FtcFromFontNameForDoc();
 #endif
@@ -128,8 +129,9 @@ int doc;
 	struct CA ca;
 	char grpprl[96];
 	char szFont[LF_FACESIZE];
+	char szLanguage[32];
 	int bold, italic, underline, strike, smallCaps, allCaps, hidden;
-	int hps, ico;
+	int hps, ico, charset;
 	int jc, dxaLeft, dxaRight, dxaLeft1, dyaBefore, dyaAfter, dyaLine;
 	int fKeep, fKeepFollow, fPageBreakBefore, fBottomBorder;
 	int xaPage, yaPage, dxaLeftPage, dxaRightPage, dyaTopPage, dyaBottomPage;
@@ -195,7 +197,8 @@ int doc;
 		{
 		if (!OpusModernGetPendingDocxRun(i, &cpFirst, &cpLim, &bold,
 				&italic, &underline, &strike, &smallCaps, &allCaps,
-				&hidden, &hps, &ico, szFont, sizeof(szFont)))
+				&hidden, &hps, &ico, szFont, sizeof(szFont), &charset,
+				szLanguage, sizeof(szLanguage)))
 			continue;
 		if (cpFirst < cp0 || cpFirst >= cpMac)
 			continue;
@@ -214,7 +217,7 @@ int doc;
 		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCFVanish, hidden);
 		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCHps, hps);
 		cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCIco, ico);
-		ftc = OpusX64FtcFromFontNameForDoc(doc, szFont);
+		ftc = OpusX64FtcFromFontNameForDoc(doc, szFont, charset);
 		if (ftc >= 0)
 			cb = CbAppendDocxPrl(grpprl, cb, sizeof(grpprl), sprmCFtc, ftc);
 		ca.doc = doc;
@@ -224,6 +227,7 @@ int doc;
 		}
 
 	PdodDoc(doc)->fFormatted = fTrue;
+	OpusModernBindPendingDocxUnicode(doc);
 	OpusModernClearPendingDocxFormatting();
 }
 #endif

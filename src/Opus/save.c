@@ -708,7 +708,7 @@ LCleanup:
 			FWin95SaveAliasMatches(stFile) && PdodDoc(doc)->fn != fnNil)
 		FCloseFn(PdodDoc(doc)->fn);
 	if (!OpusFinishWin95SaveAlias(stFile,
-			cmd == cmdOK && pcmb->fAction) && cmd == cmdOK)
+			cmd == cmdOK && pcmb->fAction, doc) && cmd == cmdOK)
 		cmd = cmdError;
 	#endif
 	if (cmd == cmdCancelled)

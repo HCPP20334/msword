@@ -813,6 +813,9 @@ int doc;
 	int isels;
 	struct DOD *pdod, dod;
 	extern struct PL **vhplbmc;
+#ifdef OPUS_X64
+	extern void OpusUnicodeForgetDocument();
+#endif
 
 	Assert(doc >= 0 && doc < docMac);
 	Assert(doc == docNil || mpdochdod[doc] != hNil);
@@ -848,6 +851,9 @@ int doc;
 		vdocTemp = docNil;
 	else  if (doc == vdocScratch)
 		vdocScratch = docNil;
+#ifdef OPUS_X64
+	OpusUnicodeForgetDocument(doc);
+#endif
 	DisposeDocPdod(doc, &dod );
 
 	Assert (vdocScratch == docNil || PdodDoc(vdocScratch)->doc

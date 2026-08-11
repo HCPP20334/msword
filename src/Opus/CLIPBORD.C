@@ -479,6 +479,7 @@ ChangeClipboard()
 	if (vsab.fOwnClipboard)
 		{	/* only set handles if we really have something in docScrap */
 		SetClipboardData( CF_OWNERDISPLAY, NULL );
+		SetClipboardData( CF_UNICODETEXT, NULL );
 			/* don't put out cf_tiff or other rejected pic types, or
 			   rtf or link for any of those types
 			*/

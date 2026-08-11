@@ -865,7 +865,7 @@ target_compile_features(WORD1 PRIVATE cxx_std_20)
 target_compile_definitions(WORD1 PRIVATE
     WIN WIN23 CRLF NONATIVE OPUS_X64 NOMINMAX UNICODE _UNICODE
 )
-target_link_libraries(WORD1 PRIVATE opus_original_engine opus_x64_runtime user32 dbghelp)
+target_link_libraries(WORD1 PRIVATE opus_original_engine opus_x64_runtime user32 imm32 dbghelp)
 if(MSVC)
     target_compile_options(WORD1 PRIVATE /J /W3 /wd4005 /utf-8 /guard:cf /sdl)
     target_link_options(WORD1 PRIVATE /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf /CETCOMPAT /MANIFEST:NO)
@@ -1006,6 +1006,10 @@ add_test(NAME opus_word1_clipboard_shortcut_test
     COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --clipboard
 )
 set_tests_properties(opus_word1_clipboard_shortcut_test PROPERTIES TIMEOUT 20)
+add_test(NAME opus_word1_unicode_test
+    COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --unicode
+)
+set_tests_properties(opus_word1_unicode_test PROPERTIES TIMEOUT 20)
 add_test(NAME opus_word1_typing_test
     COMMAND $<TARGET_FILE:opus_word1_ui_test> $<TARGET_FILE:WORD1> --typing
 )

@@ -1265,6 +1265,15 @@ LHaveEvent:
 		return fFalse;
 		}
 
+#ifdef OPUS_X64
+	/* End the legacy one-byte insertion batch before a UTF-16 WM_CHAR is
+	   consumed.  The outer message loop will pass it to the Unicode bridge
+	   with the full code unit intact. */
+	if (vmsgLast.message == WM_CHAR &&
+			(unsigned int)vmsgLast.wParam >= 0x100)
+		return fFalse;
+#endif
+
 	if (FIsKeyMessage((LPMSG) &vmsgLast))
 		{
 		if (vmsgLast.wParam & 0x8000) /* indicates we did xlation */

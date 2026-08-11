@@ -105,6 +105,24 @@ static int vWin95ZoomPercent = 100;
 static int vWin95BaseDxsInch = 0;
 static int vWin95BaseDysInch = 0;
 int vOpusPdfExportStage = 0;
+static int vOpusDocxSnapshotDoc = docNil;
+static const char *vszOpusDocxSnapshotPath = NULL;
+
+int OpusGetUnicodeSelection(pdoc, pcpFirst, pcpLim)
+int *pdoc;
+long *pcpFirst;
+long *pcpLim;
+{
+	if (selCur.doc == docNil)
+		return fFalse;
+	if (pdoc != NULL)
+		*pdoc = selCur.doc;
+	if (pcpFirst != NULL)
+		*pcpFirst = selCur.cpFirst;
+	if (pcpLim != NULL)
+		*pcpLim = selCur.cpLim;
+	return fTrue;
+}
 
 int OpusExportCurrentDocumentPdf()
 {
@@ -117,14 +135,19 @@ int OpusExportCurrentDocumentPdf()
 	extern CHAR HUGE *vhpchFetch;
 	extern int OpusPdfSnapshotBegin();
 	extern int OpusPdfSnapshotAddParagraph();
-	extern int OpusPdfSnapshotAddRun();
+	extern int OpusPdfSnapshotAddRunUtf8();
 	extern int OpusPdfSnapshotExportDialog();
+	extern int OpusDocxSnapshotExportPath();
 	extern void OpusX64FontNameFromFtc();
+	extern int OpusX64CharsetFromFtc();
+	extern int OpusUnicodeTextToUtf8();
+	extern int OpusUnicodeLanguageTagAt();
 
 	vOpusPdfExportStage = 1;
-	if (selCur.doc == docNil)
+	if (vOpusDocxSnapshotDoc == docNil && selCur.doc == docNil)
 		return fFalse;
-	doc = DocMother(selCur.doc);
+	doc = vOpusDocxSnapshotDoc != docNil ? vOpusDocxSnapshotDoc :
+		DocMother(selCur.doc);
 	cpMac = CpMacDocEdit(doc);
 	if (cpMac < cp0 || cpMac > 0x3fffffffL)
 		return fFalse;
@@ -159,43 +182,59 @@ int OpusExportCurrentDocumentPdf()
 			int ich;
 			int cch;
 			int cchOutput;
-			char rgch[1024];
+			char rgch[4096];
 			char szFont[LF_FACESIZE];
+			char szLanguage[32];
+			int charset;
 			FetchCp(doc, cpRun, fcmChars + fcmProps);
 			if (vccpFetch <= 0 || vhpchFetch == NULL)
 				return fFalse;
 			cch = (int)CpMin((CP)vccpFetch, cpParaLim - cpRun);
-			cch = min(cch, sizeof(rgch) - 1);
+			cch = min(cch, (sizeof(rgch) - 1) / 4);
+			charset = OpusX64CharsetFromFtc(doc, vchpFetch.ftc);
 			cchOutput = 0;
 			for (ich = 0; ich < cch; ++ich)
 				{
 				int ch = (unsigned char)vhpchFetch[ich];
+				char chOutput;
+				char rgchUtf8[8];
+				int cchUtf8;
 				if (ch == chReturn || ch == chEop)
 					continue;
 				if (ch == chTable || ch == chTab)
-					rgch[cchOutput++] = '\t';
+					chOutput = '\t';
 				else if (ch == chSect || ch == chColumnBreak)
-					rgch[cchOutput++] = '\f';
+					chOutput = '\f';
 				else if (ch == chNonReqHyphen)
-					rgch[cchOutput++] = '-';
+					chOutput = '-';
 				/* fSpec can cover imported field/list runs whose bytes are still
 				   ordinary visible text.  Filter actual control codes above, not
 				   the whole run, or leading words disappear from PDF output. */
 				else if (ch >= chSpace)
-					rgch[cchOutput++] = (char)ch;
+					chOutput = (char)ch;
+				else
+					continue;
+				cchUtf8 = OpusUnicodeTextToUtf8(doc, cpRun + ich,
+						&chOutput, 1, charset, rgchUtf8, sizeof(rgchUtf8));
+				if (cchUtf8 < 0 || cchUtf8 > sizeof(rgch) - 1 - cchOutput)
+					return fFalse;
+				bltbyte(rgchUtf8, rgch + cchOutput, cchUtf8);
+				cchOutput += cchUtf8;
 				}
 			if (cchOutput > 0)
 				{
 				rgch[cchOutput] = '\0';
 				OpusX64FontNameFromFtc(vchpFetch.ftc,
 						szFont, sizeof(szFont));
+				OpusUnicodeLanguageTagAt(doc, cpRun,
+						szLanguage, sizeof(szLanguage));
 				vOpusPdfExportStage = 100000 + (int)cpRun;
-				if (!OpusPdfSnapshotAddRun(rgch, cchOutput, szFont,
+				if (!OpusPdfSnapshotAddRunUtf8(rgch, cchOutput, szFont,
 						vchpFetch.hps, vchpFetch.fBold,
 						vchpFetch.fItalic, vchpFetch.kul != kulNone,
 						vchpFetch.fStrike, vchpFetch.fSmallCaps,
 						vchpFetch.fCaps, vchpFetch.fVanish,
-						vchpFetch.ico))
+						vchpFetch.ico, szLanguage, charset))
 					return fFalse;
 				}
 			cpRun += cch;
@@ -203,8 +242,26 @@ int OpusExportCurrentDocumentPdf()
 		cpPara = cpParaLim;
 		}
 	vOpusPdfExportStage = 3;
-	result = OpusPdfSnapshotExportDialog(vhwndApp);
+	result = vszOpusDocxSnapshotPath != NULL ?
+		OpusDocxSnapshotExportPath(vszOpusDocxSnapshotPath) :
+		OpusPdfSnapshotExportDialog(vhwndApp);
 	vOpusPdfExportStage = result ? 4 : -4;
+	return result;
+}
+
+int OpusSaveDocumentAsDocx(doc, szPath)
+int doc;
+const char *szPath;
+{
+	int result;
+	if (doc == docNil || szPath == NULL || *szPath == '\0' ||
+			vOpusDocxSnapshotDoc != docNil)
+		return fFalse;
+	vOpusDocxSnapshotDoc = DocMother(doc);
+	vszOpusDocxSnapshotPath = szPath;
+	result = OpusExportCurrentDocumentPdf();
+	vOpusDocxSnapshotDoc = docNil;
+	vszOpusDocxSnapshotPath = NULL;
 	return result;
 }
 

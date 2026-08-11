@@ -26,6 +26,7 @@ int FSetCabSz(void**, const char*, std::uint16_t);
 int OpusModernPathIsDocx(const char*);
 int OpusModernDocxToTextFile(const char*, const char*);
 int OpusModernRtfFileToDocx(const char*, const char*);
+int OpusSaveDocumentAsDocx(int, const char*);
 }
 
 extern "C" void OpusX64TraceRibbon(const char*, int, int, int, int,
@@ -2527,7 +2528,7 @@ int OpusWin95DisplayAlias(unsigned char* const st_file) {
 }
 
 int OpusFinishWin95SaveAlias(const unsigned char* st_file,
-                             const int success) {
+                             const int success, const int doc) {
     const std::string path = counted_path(st_file);
     if (path.empty()) {
         return !g_win95_save_alias.active;
@@ -2541,9 +2542,8 @@ int OpusFinishWin95SaveAlias(const unsigned char* st_file,
         if (copied) {
             copied = OpusModernPathIsDocx(
                          g_win95_save_alias.selected_path.c_str()) ?
-                OpusModernRtfFileToDocx(
-                    g_win95_save_alias.legacy_path.c_str(),
-                    g_win95_save_alias.selected_path.c_str()) != 0 :
+                OpusSaveDocumentAsDocx(
+                    doc, g_win95_save_alias.selected_path.c_str()) != 0 :
                 atomic_copy_file(g_win95_save_alias.legacy_path,
                                  g_win95_save_alias.selected_path);
         }
@@ -2565,7 +2565,7 @@ int OpusFinishWin95SaveAlias(const unsigned char* st_file,
         return false;
     }
     return OpusModernPathIsDocx(saved->second.c_str()) ?
-        OpusModernRtfFileToDocx(path.c_str(), saved->second.c_str()) != 0 :
+        OpusSaveDocumentAsDocx(doc, saved->second.c_str()) != 0 :
         atomic_copy_file(path, saved->second);
 }
 
