@@ -1,15 +1,35 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <climits>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <string>
 
 extern "C" int OpusModernDocxToRtfFile(const char*, const char*);
+extern "C" int OpusModernDocxToTextFile(const char*, const char*);
 extern "C" int OpusModernRtfFileToDocx(const char*, const char*);
 extern "C" int OpusModernRtfFileToPdf(const char*, const char*);
+extern "C" int OpusPdfSnapshotBegin(int, int, int, int, int, int);
+extern "C" int OpusPdfSnapshotAddParagraph(int, int, int, int, int, int,
+                                            int, int, int, int, int);
+extern "C" int OpusPdfSnapshotAddRun(const char*, int, const char*, int,
+                                      int, int, int, int, int, int, int, int);
+
+std::string read_file(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), {}};
+}
 
 int main(const int argument_count, char** arguments) {
+    if (argument_count == 4 && std::strcmp(arguments[1], "--text") == 0) {
+        const bool converted =
+            OpusModernDocxToTextFile(arguments[2], arguments[3]) != 0;
+        std::cout << "DOCX text import "
+                  << (converted ? "passed" : "failed") << '\n';
+        return converted ? 0 : 4;
+    }
     if (argument_count == 3) {
         const bool converted =
             OpusModernDocxToRtfFile(arguments[1], arguments[2]) != 0;
@@ -32,6 +52,8 @@ int main(const int argument_count, char** arguments) {
     const std::string rtf = base + ".rtf";
     const std::string docx = base + ".docx";
     const std::string roundtrip = base + ".roundtrip.rtf";
+    const std::string oversized = base + ".oversized.rtf";
+    const std::string preserved = base + ".preserved.pdf";
     char requested_pdf[32768]{};
     const DWORD requested_pdf_length = GetEnvironmentVariableA(
         "WORD1_TEST_KEEP_PDF", requested_pdf,
@@ -51,6 +73,35 @@ int main(const int argument_count, char** arguments) {
     const bool read = written &&
         OpusModernDocxToRtfFile(docx.c_str(), roundtrip.c_str()) != 0;
     const bool pdf_written = OpusModernRtfFileToPdf(rtf.c_str(), pdf.c_str()) != 0;
+    {
+        std::ofstream output(preserved, std::ios::binary);
+        output << "ORIGINAL";
+    }
+    HANDLE oversized_file = CreateFileA(
+        oversized.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+        FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    bool oversized_created = oversized_file != INVALID_HANDLE_VALUE;
+    if (oversized_created) {
+        LARGE_INTEGER hostile_size{};
+        hostile_size.QuadPart = 64ll * 1024ll * 1024ll + 1;
+        oversized_created = SetFilePointerEx(oversized_file, hostile_size,
+                                             nullptr, FILE_BEGIN) &&
+                             SetEndOfFile(oversized_file);
+        CloseHandle(oversized_file);
+    }
+    const bool oversized_rejected = oversized_created &&
+        OpusModernRtfFileToPdf(oversized.c_str(), preserved.c_str()) == 0 &&
+        read_file(preserved) == "ORIGINAL";
+    const bool invalid_snapshot_rejected =
+        OpusPdfSnapshotBegin(INT_MAX, INT_MAX, INT_MAX, INT_MAX,
+                             INT_MAX, INT_MAX) == 0 &&
+        OpusPdfSnapshotBegin(12240, 15840, 1440, 1440, 1440, 1440) != 0 &&
+        OpusPdfSnapshotAddParagraph(0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0) != 0 &&
+        OpusPdfSnapshotAddParagraph(0, 0, 0, 0, 0, 0, -240,
+                                    0, 0, 0, 0) != 0 &&
+        OpusPdfSnapshotAddRun("x", INT_MAX, "Arial", 20,
+                              0, 0, 0, 0, 0, 0, 0, 0) == 0;
     std::string result;
     if (read) {
         std::ifstream input(roundtrip, std::ios::binary);
@@ -64,6 +115,8 @@ int main(const int argument_count, char** arguments) {
     DeleteFileA(rtf.c_str());
     DeleteFileA(docx.c_str());
     DeleteFileA(roundtrip.c_str());
+    DeleteFileA(oversized.c_str());
+    DeleteFileA(preserved.c_str());
     if (!keep_pdf) DeleteFileA(pdf.c_str());
     if (!written || !read || result.find("Bold") == std::string::npos ||
         result.find("Second paragraph") == std::string::npos ||
@@ -75,10 +128,14 @@ int main(const int argument_count, char** arguments) {
         pdf_data.find("Second paragraph") == std::string::npos ||
         pdf_data.find("/Helvetica-Bold") == std::string::npos ||
         pdf_data.find("xref") == std::string::npos ||
-        pdf_data.find("%%EOF") == std::string::npos) {
+        pdf_data.find("%%EOF") == std::string::npos ||
+        !oversized_rejected || !invalid_snapshot_rejected) {
         std::cerr << "DOCX round trip failed: write=" << written
                   << " read=" << read << " pdf=" << pdf_written
-                  << " bytes=" << result.size() << '\n';
+                  << " bytes=" << result.size()
+                  << " oversizedRejected=" << oversized_rejected
+                  << " invalidSnapshotRejected="
+                  << invalid_snapshot_rejected << '\n';
         return 2;
     }
     std::cout << "DOCX round trip passed (" << result.size() << " RTF bytes)\n";

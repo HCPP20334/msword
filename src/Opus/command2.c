@@ -2479,6 +2479,11 @@ uns atm;
 
 	Assert(atm < atmMax);
 
+#ifdef OPUS_X64
+	/* Never execute document/template macros merely because a file opened,
+	   closed, or Word started.  See the secure default in elmisc.c. */
+	return cmdOK;
+#endif
 
 	/* Skip auto macro if shift key is down */
 	if (vfDisableAutoMacros || (GetAsyncKeyState(VK_SHIFT) & 0x8000))

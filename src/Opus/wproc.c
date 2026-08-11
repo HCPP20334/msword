@@ -1829,6 +1829,11 @@ LONG      lParam;
 				pffn = (struct FFN *)PstFromSttb(vhsttbFont, ibst);
 				return (LRESULT)(unsigned char)ChsPffn(pffn);
 				}
+			case 105:
+				{
+				extern int vOpusPdfExportStage;
+				return (LRESULT)vOpusPdfExportStage;
+				}
 			}
 		return (LRESULT) -1;
 #endif

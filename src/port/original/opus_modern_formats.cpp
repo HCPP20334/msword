@@ -7,14 +7,18 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
+#include <charconv>
 #include <cwctype>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -22,6 +26,50 @@
 using Microsoft::WRL::ComPtr;
 
 namespace {
+
+constexpr std::size_t kMaxDocumentXmlBytes = 64u * 1024u * 1024u;
+constexpr std::size_t kMaxStylesXmlBytes = 8u * 1024u * 1024u;
+constexpr std::size_t kMaxRtfBytes = 64u * 1024u * 1024u;
+constexpr std::size_t kMaxTextBytes = 32u * 1024u * 1024u;
+constexpr std::size_t kMaxGeneratedBytes = 256u * 1024u * 1024u;
+constexpr std::size_t kMaxStyles = 4096;
+constexpr std::size_t kMaxParagraphs = 200000;
+constexpr std::size_t kMaxRuns = 1000000;
+constexpr std::size_t kMaxTableRows = 4096;
+constexpr std::size_t kMaxTableColumns = 256;
+constexpr std::size_t kMaxTableCells = 262144;
+
+void require_parse_limit(const bool condition) {
+    if (!condition) throw std::length_error("document exceeds import limits");
+}
+
+bool parse_bounded_int(std::string_view text, const int minimum,
+                       const int maximum, int& result) {
+    if (text.empty()) return false;
+    int parsed = 0;
+    const auto conversion = std::from_chars(
+        text.data(), text.data() + text.size(), parsed, 10);
+    if (conversion.ec != std::errc{} ||
+        conversion.ptr != text.data() + text.size() ||
+        parsed < minimum || parsed > maximum) {
+        return false;
+    }
+    result = parsed;
+    return true;
+}
+
+bool parse_rgb(std::string_view text, unsigned& result) {
+    if (text.size() != 6) return false;
+    unsigned parsed = 0;
+    const auto conversion = std::from_chars(
+        text.data(), text.data() + text.size(), parsed, 16);
+    if (conversion.ec != std::errc{} ||
+        conversion.ptr != text.data() + text.size() || parsed > 0xffffff) {
+        return false;
+    }
+    result = parsed;
+    return true;
+}
 
 struct ComApartment {
     HRESULT result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -180,11 +228,37 @@ bool has_extension(const std::string& path, const char* extension) {
            _stricmp(path.c_str() + path.size() - length, extension) == 0;
 }
 
-bool read_stream(IStream* stream, std::string& data) {
+bool safe_file_path_syntax(std::wstring_view path) {
+    if (path.empty() || path.size() >= 32760 ||
+        path.starts_with(LR"(\\.\)") ||
+        path.starts_with(LR"(\\?\GLOBALROOT\)")) return false;
+    for (std::size_t index = 0; index < path.size(); ++index) {
+        if (path[index] == L':' && index != 1) return false;
+    }
+    return true;
+}
+
+bool regular_file_within_limit(const std::wstring& path,
+                               const std::size_t maximum_size) {
+    if (!safe_file_path_syntax(path)) return false;
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard,
+                              &attributes) ||
+        (attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        return false;
+    }
+    const ULONGLONG size =
+        (static_cast<ULONGLONG>(attributes.nFileSizeHigh) << 32) |
+        attributes.nFileSizeLow;
+    return size <= maximum_size;
+}
+
+bool read_stream(IStream* stream, std::string& data,
+                 const std::size_t maximum_size) {
     STATSTG status{};
     if (stream == nullptr || FAILED(stream->Stat(&status, STATFLAG_NONAME)) ||
-        status.cbSize.QuadPart < 0 ||
-        status.cbSize.QuadPart > static_cast<LONGLONG>(256 * 1024 * 1024)) {
+        status.cbSize.QuadPart > static_cast<ULONGLONG>(maximum_size) ||
+        maximum_size > MAXDWORD) {
         return false;
     }
     data.resize(static_cast<std::size_t>(status.cbSize.QuadPart));
@@ -197,7 +271,8 @@ bool read_stream(IStream* stream, std::string& data) {
 }
 
 bool read_opc_part(const std::wstring& path, const wchar_t* part_name,
-                   std::string& data) {
+                   std::string& data, const std::size_t maximum_size) {
+    if (!regular_file_within_limit(path, kMaxGeneratedBytes)) return false;
     ComApartment apartment;
     if (!apartment.usable()) return false;
     ComPtr<IOpcFactory> factory;
@@ -221,7 +296,7 @@ bool read_opc_part(const std::wstring& path, const wchar_t* part_name,
            SUCCEEDED(factory->CreatePartUri(part_name, &uri)) &&
            SUCCEEDED(parts->GetPart(uri.Get(), &part)) &&
            SUCCEEDED(part->GetContentStream(&content)) &&
-           read_stream(content.Get(), data);
+           read_stream(content.Get(), data, maximum_size);
 }
 
 std::string tag_attribute(std::string_view tag, std::string_view name) {
@@ -371,7 +446,7 @@ void apply_run_properties(RunStyle& style, std::string_view props) {
     apply_switch("caps", style.all_caps);
     apply_switch("vanish", style.hidden);
     if (const std::string size = first_property_value(props, "sz"); !size.empty()) {
-        style.half_points = (std::max)(2, std::atoi(size.c_str()));
+        parse_bounded_int(size, 2, 254, style.half_points);
     }
     if (const std::string font = first_property_value(props, "rFonts", "ascii");
         !font.empty()) {
@@ -379,9 +454,12 @@ void apply_run_properties(RunStyle& style, std::string_view props) {
     }
     if (const std::string color = first_property_value(props, "color");
         !color.empty() && color != "auto" && color.size() == 6) {
-        const unsigned rgb = std::strtoul(color.c_str(), nullptr, 16);
-        style.color = RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff);
-        style.auto_color = false;
+        unsigned rgb = 0;
+        if (parse_rgb(color, rgb)) {
+            style.color = RGB((rgb >> 16) & 0xff,
+                              (rgb >> 8) & 0xff, rgb & 0xff);
+            style.auto_color = false;
+        }
     } else if (first_property_value(props, "color") == "auto") {
         style.auto_color = true;
         style.color = RGB(0, 0, 0);
@@ -402,19 +480,22 @@ void apply_paragraph_properties(Paragraph& paragraph, std::string_view props) {
         const std::string right = tag_attribute(indent, "right");
         const std::string first = tag_attribute(indent, "firstLine");
         const std::string hanging = tag_attribute(indent, "hanging");
-        if (!left.empty()) paragraph.left_indent = std::atoi(left.c_str());
-        if (!right.empty()) paragraph.right_indent = std::atoi(right.c_str());
-        if (!first.empty()) paragraph.first_line_indent = std::atoi(first.c_str());
-        if (!hanging.empty()) paragraph.first_line_indent = -std::atoi(hanging.c_str());
+        parse_bounded_int(left, -31680, 31680, paragraph.left_indent);
+        parse_bounded_int(right, -31680, 31680, paragraph.right_indent);
+        parse_bounded_int(first, -31680, 31680,
+                          paragraph.first_line_indent);
+        int hanging_indent = 0;
+        if (parse_bounded_int(hanging, 0, 31680, hanging_indent))
+            paragraph.first_line_indent = -hanging_indent;
     }
     if (const std::string_view spacing = element_block(props, "spacing");
         !spacing.empty()) {
         const std::string before = tag_attribute(spacing, "before");
         const std::string after = tag_attribute(spacing, "after");
         const std::string line = tag_attribute(spacing, "line");
-        if (!before.empty()) paragraph.space_before = std::atoi(before.c_str());
-        if (!after.empty()) paragraph.space_after = std::atoi(after.c_str());
-        if (!line.empty()) paragraph.line_spacing = std::atoi(line.c_str());
+        parse_bounded_int(before, 0, 31680, paragraph.space_before);
+        parse_bounded_int(after, 0, 31680, paragraph.space_after);
+        parse_bounded_int(line, 0, 31680, paragraph.line_spacing);
     }
     const auto apply_switch = [&](const char* name, bool& target) {
         const int state = property_state(props, name);
@@ -473,6 +554,7 @@ StyleCatalog parse_style_catalog(std::string_view xml) {
         const std::string id = tag_attribute(opening, "styleId");
         const std::string_view block = xml.substr(position, close + 10 - position);
         if (!id.empty()) {
+            require_parse_limit(catalog.definitions.size() < kMaxStyles);
             StyleDefinition definition;
             definition.based_on = first_property_value(block, "basedOn");
             if (const std::string_view props = element_block(block, "rPr");
@@ -522,6 +604,7 @@ std::wstring parse_run_text(std::string_view run) {
             const std::size_t close = run.find("</w:t>", tag_end + 1);
             if (close == std::string_view::npos) break;
             text += xml_unescape(run.substr(tag_end + 1, close - tag_end - 1));
+            require_parse_limit(text.size() <= kMaxTextBytes);
             position = close + 6;
         } else {
             if (name == "tab") text.push_back(L'\t');
@@ -538,7 +621,8 @@ std::wstring parse_run_text(std::string_view run) {
 }
 
 std::vector<Paragraph> parse_paragraphs_flat(
-    std::string_view xml, const StyleCatalog& catalog = {}) {
+    std::string_view xml, const StyleCatalog& catalog,
+    std::size_t& total_paragraphs, std::size_t& total_runs) {
     std::vector<Paragraph> paragraphs;
     std::size_t position = 0;
     while ((position = xml.find("<w:p", position)) != std::string_view::npos) {
@@ -577,11 +661,18 @@ std::vector<Paragraph> parse_paragraphs_flat(
             const std::string_view run = block.substr(
                 run_position, run_close + 6 - run_position);
             std::wstring text = parse_run_text(run);
-            if (!text.empty()) paragraph.runs.push_back(
-                {parse_run_style(run, paragraph_run, catalog), std::move(text)});
+            if (!text.empty()) {
+                require_parse_limit(total_runs < kMaxRuns);
+                paragraph.runs.push_back(
+                    {parse_run_style(run, paragraph_run, catalog),
+                     std::move(text)});
+                ++total_runs;
+            }
             run_position = run_close + 6;
         }
+        require_parse_limit(total_paragraphs < kMaxParagraphs);
         paragraphs.push_back(std::move(paragraph));
+        ++total_paragraphs;
         position = close + 6;
     }
     if (paragraphs.empty()) paragraphs.push_back({});
@@ -615,6 +706,8 @@ std::vector<Paragraph> parse_document_xml(
     std::vector<TableLayout>* table_layouts = nullptr) {
     std::vector<Paragraph> paragraphs;
     if (table_layouts != nullptr) table_layouts->clear();
+    std::size_t total_paragraphs = 0;
+    std::size_t total_runs = 0;
     std::size_t cursor = 0;
     while (cursor < xml.size()) {
         const std::size_t table_start = find_word_tag(xml, "tbl", cursor);
@@ -622,10 +715,12 @@ std::vector<Paragraph> parse_document_xml(
             const std::string_view remainder = xml.substr(cursor);
             if (find_word_tag(remainder, "p", 0) != std::string_view::npos) {
                 std::vector<Paragraph> tail =
-                    parse_paragraphs_flat(remainder, catalog);
+                    parse_paragraphs_flat(remainder, catalog,
+                                          total_paragraphs, total_runs);
                 paragraphs.insert(paragraphs.end(),
                                   std::make_move_iterator(tail.begin()),
                                   std::make_move_iterator(tail.end()));
+                require_parse_limit(paragraphs.size() <= kMaxParagraphs);
             }
             break;
         }
@@ -633,10 +728,12 @@ std::vector<Paragraph> parse_document_xml(
             xml.substr(cursor, table_start - cursor);
         if (find_word_tag(prefix, "p", 0) != std::string_view::npos) {
             std::vector<Paragraph> before =
-                parse_paragraphs_flat(prefix, catalog);
+                parse_paragraphs_flat(prefix, catalog,
+                                      total_paragraphs, total_runs);
             paragraphs.insert(paragraphs.end(),
                               std::make_move_iterator(before.begin()),
                               std::make_move_iterator(before.end()));
+            require_parse_limit(paragraphs.size() <= kMaxParagraphs);
         }
         const std::size_t table_close = xml.find("</w:tbl>", table_start);
         if (table_close == std::string_view::npos) break;
@@ -646,12 +743,15 @@ std::vector<Paragraph> parse_document_xml(
         TableLayout layout;
         layout.first_paragraph = paragraphs.size();
         std::size_t row_cursor = 0;
+        std::size_t table_cell_count = 0;
         while (true) {
             const std::size_t row_start = find_word_tag(table, "tr", row_cursor);
             if (row_start == std::string_view::npos) break;
             const std::size_t row_close = table.find("</w:tr>", row_start);
             if (row_close == std::string_view::npos) break;
             const std::size_t row_end = row_close + std::strlen("</w:tr>");
+            require_parse_limit(static_cast<std::size_t>(layout.rows) <
+                                kMaxTableRows);
             const std::string_view row = table.substr(row_start,
                                                        row_end - row_start);
             std::vector<std::vector<Paragraph>> cells;
@@ -662,8 +762,12 @@ std::vector<Paragraph> parse_document_xml(
                 const std::size_t cell_close = row.find("</w:tc>", cell_start);
                 if (cell_close == std::string_view::npos) break;
                 const std::size_t cell_end = cell_close + std::strlen("</w:tc>");
+                require_parse_limit(cells.size() < kMaxTableColumns &&
+                                    table_cell_count < kMaxTableCells);
                 cells.push_back(parse_paragraphs_flat(
-                    row.substr(cell_start, cell_end - cell_start), catalog));
+                    row.substr(cell_start, cell_end - cell_start), catalog,
+                    total_paragraphs, total_runs));
+                ++table_cell_count;
                 cell_cursor = cell_end;
             }
             std::size_t line_count = 0;
@@ -678,6 +782,8 @@ std::vector<Paragraph> parse_document_xml(
                             paragraphs.push_back(std::move(cell[line]));
                         else
                             paragraphs.push_back({});
+                        require_parse_limit(paragraphs.size() <=
+                                            kMaxParagraphs);
                     }
                     ++layout.rows;
                 }
@@ -691,10 +797,12 @@ std::vector<Paragraph> parse_document_xml(
             if (table_layouts != nullptr) table_layouts->push_back(layout);
         } else {
             paragraphs.resize(layout.first_paragraph);
-            std::vector<Paragraph> flat = parse_paragraphs_flat(table, catalog);
+            std::vector<Paragraph> flat = parse_paragraphs_flat(
+                table, catalog, total_paragraphs, total_runs);
             paragraphs.insert(paragraphs.end(),
                               std::make_move_iterator(flat.begin()),
                               std::make_move_iterator(flat.end()));
+            require_parse_limit(paragraphs.size() <= kMaxParagraphs);
         }
         cursor = table_end;
     }
@@ -707,20 +815,22 @@ DocumentSettings parse_document_settings(std::string_view xml) {
     const std::string_view section = element_block(xml, "sectPr");
     const std::string_view size = element_block(section, "pgSz");
     const std::string_view margins = element_block(section, "pgMar");
-    const auto integer_attribute = [](std::string_view tag,
-                                      const char* name) {
+    const auto integer_attribute = [](std::string_view tag, const char* name,
+                                      const int minimum, const int maximum) {
         const std::string value = tag_attribute(tag, name);
-        return value.empty() ? 0 : std::atoi(value.c_str());
+        int result = 0;
+        parse_bounded_int(value, minimum, maximum, result);
+        return result;
     };
-    settings.page_width = integer_attribute(size, "w");
-    settings.page_height = integer_attribute(size, "h");
-    settings.margin_left = integer_attribute(margins, "left");
-    settings.margin_right = integer_attribute(margins, "right");
-    settings.margin_top = integer_attribute(margins, "top");
-    settings.margin_bottom = integer_attribute(margins, "bottom");
+    settings.page_width = integer_attribute(size, "w", 720, 63360);
+    settings.page_height = integer_attribute(size, "h", 720, 63360);
+    settings.margin_left = integer_attribute(margins, "left", 0, 31680);
+    settings.margin_right = integer_attribute(margins, "right", 0, 31680);
+    settings.margin_top = integer_attribute(margins, "top", 0, 31680);
+    settings.margin_bottom = integer_attribute(margins, "bottom", 0, 31680);
     settings.valid = settings.page_width > 0 && settings.page_height > 0 &&
-                     settings.margin_left >= 0 && settings.margin_right >= 0 &&
-                     settings.margin_top >= 0 && settings.margin_bottom >= 0;
+        settings.margin_left + settings.margin_right < settings.page_width &&
+        settings.margin_top + settings.margin_bottom < settings.page_height;
     return settings;
 }
 
@@ -756,6 +866,8 @@ PendingDocxImport pending_docx_import;
 struct PendingPdfExport {
     std::vector<Paragraph> paragraphs;
     DocumentSettings settings;
+    std::size_t run_count = 0;
+    std::size_t text_bytes = 0;
 };
 
 PendingPdfExport pending_pdf_export;
@@ -780,6 +892,7 @@ std::string paragraphs_to_text(const std::vector<Paragraph>& paragraphs,
     std::string text;
     if (pending != nullptr) *pending = {};
     for (std::size_t index = 0; index < paragraphs.size(); ++index) {
+        require_parse_limit(text.size() <= kMaxTextBytes);
         PendingParagraphFormat paragraph_format;
         paragraph_format.cp_first = static_cast<long>(text.size());
         paragraph_format.paragraph = paragraphs[index];
@@ -788,12 +901,17 @@ std::string paragraphs_to_text(const std::vector<Paragraph>& paragraphs,
             PendingRunFormat run_format;
             run_format.cp_first = static_cast<long>(text.size());
             run_format.style = run.style;
-            text += ansi_run_text(run.text);
+            const std::string encoded = ansi_run_text(run.text);
+            require_parse_limit(encoded.size() <= kMaxTextBytes - text.size());
+            text += encoded;
             run_format.cp_lim = static_cast<long>(text.size());
             if (pending != nullptr && run_format.cp_lim > run_format.cp_first)
                 pending->runs.push_back(std::move(run_format));
         }
-        if (index + 1 < paragraphs.size()) text += "\r\n";
+        if (index + 1 < paragraphs.size()) {
+            require_parse_limit(text.size() <= kMaxTextBytes - 2);
+            text += "\r\n";
+        }
         paragraph_format.cp_lim = static_cast<long>(text.size());
         if (pending != nullptr)
             pending->paragraphs.push_back(std::move(paragraph_format));
@@ -824,9 +942,13 @@ bool load_docx_paragraphs(const char* path,
                           std::vector<TableLayout>* tables = nullptr) {
     std::string document;
     std::string styles;
-    if (!read_opc_part(wide_path(path), L"/word/document.xml", document))
+    const std::wstring document_path = wide_path(path);
+    if (document_path.empty() ||
+        !read_opc_part(document_path, L"/word/document.xml", document,
+                       kMaxDocumentXmlBytes))
         return false;
-    read_opc_part(wide_path(path), L"/word/styles.xml", styles);
+    read_opc_part(document_path, L"/word/styles.xml", styles,
+                  kMaxStylesXmlBytes);
     paragraphs = parse_document_xml(document, parse_style_catalog(styles),
                                     tables);
     if (settings != nullptr) *settings = parse_document_settings(document);
@@ -971,27 +1093,86 @@ std::string paragraphs_to_rtf(const std::vector<Paragraph>& paragraphs) {
     return rtf;
 }
 
-bool write_bytes(const std::wstring& path, std::string_view bytes) {
-    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
-                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return false;
-    DWORD written = 0;
-    const bool ok = bytes.size() <= MAXDWORD &&
-        WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()),
-                  &written, nullptr) && written == bytes.size();
-    CloseHandle(file);
-    if (!ok) DeleteFileW(path.c_str());
-    return ok;
+bool reserve_sibling_temporary_file(const std::wstring& path,
+                                    std::wstring& temporary,
+                                    HANDLE& file) {
+    if (!safe_file_path_syntax(path)) return false;
+    static std::atomic<unsigned long> sequence{0};
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        temporary = path + L".word1tmp-" +
+            std::to_wstring(GetCurrentProcessId()) + L"-" +
+            std::to_wstring(++sequence);
+        file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr,
+                           CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) return true;
+        if (GetLastError() != ERROR_FILE_EXISTS &&
+            GetLastError() != ERROR_ALREADY_EXISTS) return false;
+    }
+    return false;
 }
 
-bool read_bytes(const std::wstring& path, std::string& bytes) {
+bool commit_sibling_temporary_file(const std::wstring& temporary,
+                                   const std::wstring& path) {
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    bool replaced = false;
+    if (attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        replaced = ReplaceFileW(path.c_str(), temporary.c_str(), nullptr,
+                                REPLACEFILE_WRITE_THROUGH, nullptr, nullptr) !=
+                   FALSE;
+        if (!replaced) {
+            replaced = MoveFileExW(
+                temporary.c_str(), path.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+        }
+    } else if (attributes == INVALID_FILE_ATTRIBUTES &&
+               GetLastError() == ERROR_FILE_NOT_FOUND) {
+        replaced = MoveFileExW(temporary.c_str(), path.c_str(),
+                               MOVEFILE_WRITE_THROUGH) != FALSE;
+    }
+    if (!replaced) DeleteFileW(temporary.c_str());
+    return replaced;
+}
+
+bool write_bytes(const std::wstring& path, std::string_view bytes) {
+    if (bytes.size() > MAXDWORD) return false;
+    std::wstring temporary;
+    HANDLE file = INVALID_HANDLE_VALUE;
+    if (!reserve_sibling_temporary_file(path, temporary, file)) return false;
+    std::size_t position = 0;
+    bool ok = true;
+    while (position < bytes.size()) {
+        DWORD written = 0;
+        const DWORD requested = static_cast<DWORD>((std::min)(
+            bytes.size() - position,
+            static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
+        if (!WriteFile(file, bytes.data() + position, requested, &written,
+                       nullptr) || written == 0) {
+            ok = false;
+            break;
+        }
+        position += written;
+    }
+    if (ok) ok = FlushFileBuffers(file) != FALSE;
+    CloseHandle(file);
+    if (!ok) {
+        DeleteFileW(temporary.c_str());
+        return false;
+    }
+    return commit_sibling_temporary_file(temporary, path);
+}
+
+bool read_bytes(const std::wstring& path, std::string& bytes,
+                const std::size_t maximum_size = kMaxRtfBytes) {
+    if (!regular_file_within_limit(path, maximum_size)) return false;
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
                               nullptr);
     if (file == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER size{};
     bool ok = GetFileSizeEx(file, &size) && size.QuadPart >= 0 &&
-              size.QuadPart <= 256 * 1024 * 1024;
+              size.QuadPart <= static_cast<LONGLONG>(maximum_size) &&
+              maximum_size <= MAXDWORD;
     if (ok) {
         bytes.resize(static_cast<std::size_t>(size.QuadPart));
         DWORD read = 0;
@@ -1005,7 +1186,17 @@ bool read_bytes(const std::wstring& path, std::string& bytes) {
 struct StreamCookie { const char* data; LONG length; LONG position; };
 DWORD CALLBACK rich_edit_stream_in(DWORD_PTR cookie, LPBYTE buffer,
                                    LONG requested, LONG* copied) {
+    if (cookie == 0 || buffer == nullptr || copied == nullptr ||
+        requested <= 0) {
+        if (copied != nullptr) *copied = 0;
+        return 1;
+    }
     auto& source = *reinterpret_cast<StreamCookie*>(cookie);
+    if (source.data == nullptr || source.position < 0 ||
+        source.position > source.length) {
+        *copied = 0;
+        return 1;
+    }
     *copied = (std::min)(requested, source.length - source.position);
     if (*copied > 0) {
         std::memcpy(buffer, source.data + source.position, *copied);
@@ -1017,7 +1208,10 @@ DWORD CALLBACK rich_edit_stream_in(DWORD_PTR cookie, LPBYTE buffer,
 class RichEditDocument {
 public:
     bool load(std::string_view rtf) {
-        module_ = LoadLibraryW(L"Msftedit.dll");
+        if (rtf.size() > kMaxRtfBytes ||
+            rtf.size() > static_cast<std::size_t>(LONG_MAX)) return false;
+        module_ = LoadLibraryExW(L"Msftedit.dll", nullptr,
+                                 LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (module_ == nullptr) return false;
         window_ = CreateWindowExW(0, MSFTEDIT_CLASS, L"", WS_POPUP | ES_MULTILINE,
                                   0, 0, 100, 100, nullptr, nullptr,
@@ -1238,13 +1432,13 @@ bool write_docx(const std::wstring& path, const std::vector<Paragraph>& paragrap
                           L"/word/settings.xml",
                           L"http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings"))
         return false;
-    DeleteFileW(path.c_str());
-    return SUCCEEDED(factory->CreateStreamOnFile(path.c_str(), OPC_STREAM_IO_WRITE,
-                                                  nullptr, FILE_ATTRIBUTE_NORMAL,
-                                                  &output)) &&
-           SUCCEEDED(factory->WritePackageToStream(package.Get(),
-                                                   OPC_WRITE_DEFAULT,
-                                                   output.Get()));
+    if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &output)) ||
+        FAILED(factory->WritePackageToStream(package.Get(),
+                                             OPC_WRITE_DEFAULT,
+                                             output.Get()))) return false;
+    std::string package_bytes;
+    return read_stream(output.Get(), package_bytes, kMaxGeneratedBytes) &&
+           write_bytes(path, package_bytes);
 }
 
 bool rtf_to_docx(const std::wstring& rtf_path, const std::wstring& docx_path) {
@@ -1620,11 +1814,18 @@ int export_paragraphs_to_pdf_dialog(
     dialog.lpstrDefExt = L"pdf";
     dialog.Flags = OFN_EXPLORER | OFN_ENABLESIZING | OFN_LONGNAMES |
                    OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
-    const DWORD test_path_length = GetEnvironmentVariableW(
+    DWORD test_path_length = 0;
+#ifdef OPUS_TEST_HOOKS
+    test_path_length = GetEnvironmentVariableW(
         L"WORD1_TEST_PDF_PATH", path, static_cast<DWORD>(std::size(path)));
+#endif
     const bool accepted =
         test_path_length > 0 && test_path_length < std::size(path) ?
+#ifdef OPUS_TEST_HOOKS
             (SetEnvironmentVariableW(L"WORD1_TEST_PDF_PATH", nullptr), true) :
+#else
+            true :
+#endif
             GetSaveFileNameW(&dialog) != FALSE;
     if (!accepted) {
         return CommDlgExtendedError() == 0 ? -1 : false;
@@ -1652,14 +1853,16 @@ extern "C" int OpusModernPathIsDocx(const char* path) {
 }
 
 extern "C" int OpusModernDocxToRtfFile(const char* docx_path,
-                                         const char* rtf_path) {
+                                         const char* rtf_path) try {
     std::vector<Paragraph> paragraphs;
     return load_docx_paragraphs(docx_path, paragraphs) &&
            write_bytes(wide_path(rtf_path), paragraphs_to_rtf(paragraphs));
+} catch (...) {
+    return false;
 }
 
 extern "C" int OpusModernDocxToTextFile(const char* docx_path,
-                                           const char* text_path) {
+                                           const char* text_path) try {
     std::vector<Paragraph> paragraphs;
     std::vector<TableLayout> tables;
     DocumentSettings settings;
@@ -1675,6 +1878,9 @@ extern "C" int OpusModernDocxToTextFile(const char* docx_path,
         return false;
     }
     return true;
+} catch (...) {
+    pending_docx_import = {};
+    return false;
 }
 
 extern "C" int OpusModernPendingDocxRunCount() {
@@ -1732,7 +1938,8 @@ extern "C" int OpusModernGetPendingDocxPage(
 extern "C" int OpusModernGetPendingDocxRun(
     const int index, long* cp_first, long* cp_lim, int* bold, int* italic,
     int* underline, int* strike, int* small_caps, int* all_caps, int* hidden,
-    int* half_points, int* color_index, char* font, const int font_capacity) {
+    int* half_points, int* color_index, char* font,
+    const int font_capacity) try {
     if (index < 0 || static_cast<std::size_t>(index) >=
                          pending_docx_import.runs.size()) return false;
     const PendingRunFormat& record = pending_docx_import.runs[index];
@@ -1752,6 +1959,9 @@ extern "C" int OpusModernGetPendingDocxRun(
         lstrcpynA(font, ansi_font.c_str(), font_capacity);
     }
     return true;
+} catch (...) {
+    if (font != nullptr && font_capacity > 0) font[0] = '\0';
+    return false;
 }
 
 extern "C" int OpusModernGetPendingDocxParagraph(
@@ -1795,16 +2005,23 @@ extern "C" int OpusPdfSnapshotBegin(
     const int margin_right, const int margin_top, const int margin_bottom) {
     pending_pdf_export = {};
     DocumentSettings& settings = pending_pdf_export.settings;
+    const bool dimensions_valid =
+        page_width >= 720 && page_width <= 63360 &&
+        page_height >= 720 && page_height <= 63360 &&
+        margin_left >= 0 && margin_left <= 31680 &&
+        margin_right >= 0 && margin_right <= 31680 &&
+        margin_top >= 0 && margin_top <= 31680 &&
+        margin_bottom >= 0 && margin_bottom <= 31680;
     settings.page_width = page_width;
     settings.page_height = page_height;
-    settings.margin_left = (std::max)(0, margin_left);
-    settings.margin_right = (std::max)(0, margin_right);
-    settings.margin_top = (std::max)(0, margin_top);
-    settings.margin_bottom = (std::max)(0, margin_bottom);
-    settings.valid = page_width > 0 && page_height > 0 &&
+    settings.margin_left = margin_left;
+    settings.margin_right = margin_right;
+    settings.margin_top = margin_top;
+    settings.margin_bottom = margin_bottom;
+    settings.valid = dimensions_valid &&
         settings.margin_left + settings.margin_right < page_width &&
         settings.margin_top + settings.margin_bottom < page_height;
-    return true;
+    return settings.valid;
 }
 
 extern "C" int OpusPdfSnapshotAddParagraph(
@@ -1812,7 +2029,18 @@ extern "C" int OpusPdfSnapshotAddParagraph(
     const int first_line_indent, const int space_before,
     const int space_after, const int line_spacing,
     const int keep_together, const int keep_with_next,
-    const int page_break_before, const int bottom_border) {
+    const int page_break_before, const int bottom_border) try {
+    if (pending_pdf_export.paragraphs.size() >= kMaxParagraphs) return false;
+    /* These values come from the original PAP: indentation and line spacing
+       are signed 16-bit fields, while before/after spacing are unsigned.
+       Validate their real storage domains instead of rejecting legitimate
+       exact-line-spacing and legacy sentinel values. */
+    if (left_indent < INT16_MIN || left_indent > INT16_MAX ||
+        right_indent < INT16_MIN || right_indent > INT16_MAX ||
+        first_line_indent < INT16_MIN || first_line_indent > INT16_MAX ||
+        space_before < 0 || space_before > UINT16_MAX ||
+        space_after < 0 || space_after > UINT16_MAX ||
+        line_spacing < INT16_MIN || line_spacing > INT16_MAX) return false;
     Paragraph paragraph;
     paragraph.alignment = alignment == 1 ? PFA_CENTER :
         alignment == 2 ? PFA_RIGHT :
@@ -1829,15 +2057,21 @@ extern "C" int OpusPdfSnapshotAddParagraph(
     paragraph.bottom_border = bottom_border != 0;
     pending_pdf_export.paragraphs.push_back(std::move(paragraph));
     return true;
+} catch (...) {
+    return false;
 }
 
 extern "C" int OpusPdfSnapshotAddRun(
     const char* text, const int length, const char* font,
     const int half_points, const int bold, const int italic,
     const int underline, const int strike, const int small_caps,
-    const int all_caps, const int hidden, const int color_index) {
+    const int all_caps, const int hidden, const int color_index) try {
     if (text == nullptr || length < 0 ||
-        pending_pdf_export.paragraphs.empty()) return false;
+        static_cast<std::size_t>(length) > kMaxTextBytes ||
+        pending_pdf_export.paragraphs.empty() ||
+        pending_pdf_export.run_count >= kMaxRuns ||
+        static_cast<std::size_t>(length) >
+            kMaxTextBytes - pending_pdf_export.text_bytes) return false;
     RunStyle style;
     style.bold = bold != 0;
     style.italic = italic != 0;
@@ -1846,8 +2080,13 @@ extern "C" int OpusPdfSnapshotAddRun(
     style.small_caps = small_caps != 0;
     style.all_caps = all_caps != 0;
     style.hidden = hidden != 0;
-    style.half_points = half_points >= 8 ? half_points : 20;
-    if (font != nullptr && *font != '\0') style.font = ansi_to_wide(font);
+    style.half_points = half_points >= 8 && half_points <= 254 ?
+        half_points : 20;
+    if (font != nullptr && *font != '\0') {
+        const std::size_t font_length = strnlen_s(font, 256);
+        if (font_length == 256) return false;
+        style.font = ansi_to_wide(std::string_view(font, font_length));
+    }
     apply_legacy_color(color_index, style);
     std::wstring run_text = ansi_to_wide(
         std::string_view(text, static_cast<std::size_t>(length)));
@@ -1861,38 +2100,56 @@ extern "C" int OpusPdfSnapshotAddRun(
     }
     pending_pdf_export.paragraphs.back().runs.push_back(
         {style, std::move(run_text)});
+    ++pending_pdf_export.run_count;
+    pending_pdf_export.text_bytes += static_cast<std::size_t>(length);
     return true;
+} catch (...) {
+    return false;
 }
 
-extern "C" int OpusPdfSnapshotExportDialog(HWND owner) {
+extern "C" int OpusPdfSnapshotExportDialog(HWND owner) try {
     if (pending_pdf_export.paragraphs.empty()) return false;
     const int result = export_paragraphs_to_pdf_dialog(
         owner, pending_pdf_export.paragraphs, pending_pdf_export.settings);
     pending_pdf_export = {};
     return result;
+} catch (...) {
+    pending_pdf_export = {};
+    return false;
 }
 
 extern "C" int OpusModernRtfFileToDocx(const char* rtf_path,
-                                        const char* docx_path) {
+                                        const char* docx_path) try {
     return rtf_to_docx(wide_path(rtf_path), wide_path(docx_path));
+} catch (...) {
+    return false;
 }
 
 extern "C" int OpusModernRtfFileToPdf(const char* rtf_path,
-                                       const char* pdf_path) {
+                                       const char* pdf_path) try {
     std::string rtf;
     return read_bytes(wide_path(rtf_path), rtf) &&
            rtf_to_pdf(rtf, wide_path(pdf_path));
+} catch (...) {
+    return false;
 }
 
-extern "C" int OpusExportRtfToPdfDialog(HWND owner, const char* rtf) {
-    return rtf == nullptr ? false :
-        export_rtf_to_pdf_dialog(owner, rtf);
+extern "C" int OpusExportRtfToPdfDialog(HWND owner, const char* rtf) try {
+    if (rtf == nullptr) return false;
+    const std::size_t length = strnlen_s(rtf, kMaxRtfBytes + 1);
+    return length <= kMaxRtfBytes &&
+        export_rtf_to_pdf_dialog(owner, std::string_view(rtf, length));
+} catch (...) {
+    return false;
 }
 
 extern "C" int OpusExportTextToPdfDialog(HWND owner, const char* text,
-                                           const int length) {
-    if (text == nullptr || length < 0) return false;
+                                           const int length) try {
+    if (text == nullptr || length < 0 ||
+        static_cast<std::size_t>(length) > kMaxTextBytes) return false;
     return export_rtf_to_pdf_dialog(
         owner, ansi_text_to_rtf(std::string_view(
                    text, static_cast<std::size_t>(length))));
+} catch (...) {
+    return false;
 }

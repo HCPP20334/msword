@@ -620,6 +620,7 @@ BOOL fTutorial;
 	if (!fTutorial)
 		{
 				/* BLOCK: now run macros specified on command line */
+#ifndef OPUS_X64
 		    { 
 		    int isz;
 		    CHAR * szArg;
@@ -639,6 +640,7 @@ BOOL fTutorial;
     				}
     			}
 		    }
+#endif /* !OPUS_X64 */
         }
 
 

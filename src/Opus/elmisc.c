@@ -80,7 +80,18 @@ extern BOOL          vfAwfulNoise;
 extern int vfSeeSel;
 
 
+#ifdef OPUS_X64
+/*
+ * Legacy Opus documents and templates can contain AutoOpen/AutoExec macros.
+ * The original application ran them without a trust boundary.  That is not
+ * an acceptable default for documents received from modern file systems, so
+ * the x64 port keeps automatic macros disabled.  Explicitly invoked macros
+ * continue to use the normal command path.
+ */
+BOOL vfDisableAutoMacros = fTrue;
+#else
 BOOL vfDisableAutoMacros = fFalse;
+#endif
 
 /* Simple Cursor Movement / Selection Commands */
 

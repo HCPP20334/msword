@@ -137,6 +137,12 @@ constexpr UINT kPromptMessages[] = {
 extern "C" {
 
 LRESULT CALLBACK NatAppWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == kWmDdeInitiate) {
+        // The legacy DDE server exposes document contents and macro commands
+        // to any process in the desktop session.  The modern port does not
+        // accept inbound DDE conversations.
+        return 0;
+    }
     return Dispatch(h, m, w, l, AppWndProc, kAppMessages);
 }
 LRESULT CALLBACK NatMwdWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {

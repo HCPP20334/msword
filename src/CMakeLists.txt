@@ -689,7 +689,7 @@ target_include_directories(opus_original_engine PRIVATE ${OPUS_ORIGINAL_INCLUDE_
 if(MSVC)
     # /J preserves the original compiler's unsigned-char default. Do not use
     # the C++ compiler for K&R-era original C translation units.
-    target_compile_options(opus_original_engine PRIVATE /J /W3 /wd4005 /Gy)
+    target_compile_options(opus_original_engine PRIVATE /J /W3 /wd4005 /Gy /guard:cf)
 endif()
 set_target_properties(opus_original_engine PROPERTIES
     FOLDER "Original Opus x64"
@@ -731,13 +731,14 @@ target_compile_definitions(opus_x64_runtime PRIVATE
     NONATIVE
     OPUS_X64
     NOMINMAX
+    $<$<CONFIG:Debug>:OPUS_TEST_HOOKS>
 )
 target_include_directories(opus_x64_runtime PRIVATE ${OPUS_ORIGINAL_INCLUDE_DIRS})
 target_link_libraries(opus_x64_runtime PUBLIC ole32 comdlg32 gdi32)
 if(MSVC)
     # Opus was built with unsigned plain characters; the byte-oriented string
     # and international-character assembly routines depend on that behavior.
-    target_compile_options(opus_x64_runtime PRIVATE /J /W4 /permissive-)
+    target_compile_options(opus_x64_runtime PRIVATE /J /W4 /permissive- /guard:cf /sdl)
 endif()
 set_target_properties(opus_x64_runtime PROPERTIES
     FOLDER "Original Opus x64/runtime"
@@ -866,8 +867,8 @@ target_compile_definitions(WORD1 PRIVATE
 )
 target_link_libraries(WORD1 PRIVATE opus_original_engine opus_x64_runtime user32 dbghelp)
 if(MSVC)
-    target_compile_options(WORD1 PRIVATE /J /W3 /wd4005 /utf-8)
-    target_link_options(WORD1 PRIVATE /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /MANIFEST:NO)
+    target_compile_options(WORD1 PRIVATE /J /W3 /wd4005 /utf-8 /guard:cf /sdl)
+    target_link_options(WORD1 PRIVATE /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf /CETCOMPAT /MANIFEST:NO)
 endif()
 set_target_properties(WORD1 PROPERTIES
     FOLDER "Original Opus x64/product"

@@ -104,6 +104,7 @@ extern struct REB * vpreb;
 static int vWin95ZoomPercent = 100;
 static int vWin95BaseDxsInch = 0;
 static int vWin95BaseDysInch = 0;
+int vOpusPdfExportStage = 0;
 
 int OpusExportCurrentDocumentPdf()
 {
@@ -120,6 +121,7 @@ int OpusExportCurrentDocumentPdf()
 	extern int OpusPdfSnapshotExportDialog();
 	extern void OpusX64FontNameFromFtc();
 
+	vOpusPdfExportStage = 1;
 	if (selCur.doc == docNil)
 		return fFalse;
 	doc = DocMother(selCur.doc);
@@ -127,6 +129,7 @@ int OpusExportCurrentDocumentPdf()
 	if (cpMac < cp0 || cpMac > 0x3fffffffL)
 		return fFalse;
 	pdod = PdodMother(doc);
+	vOpusPdfExportStage = 2;
 	if (!OpusPdfSnapshotBegin(pdod->dop.xaPage, pdod->dop.yaPage,
 			pdod->dop.dxaLeft, pdod->dop.dxaRight,
 			pdod->dop.dyaTop < 0 ? -pdod->dop.dyaTop : pdod->dop.dyaTop,
@@ -141,6 +144,7 @@ int OpusExportCurrentDocumentPdf()
 		cpParaLim = CpMin(caPara.cpLim, cpMac);
 		if (cpParaLim <= cpPara)
 			cpParaLim = cpPara + 1;
+		vOpusPdfExportStage = 1000 + (int)cpPara;
 		if (!OpusPdfSnapshotAddParagraph(vpapFetch.jc,
 				vpapFetch.dxaLeft, vpapFetch.dxaRight,
 				vpapFetch.dxaLeft1, vpapFetch.dyaBefore,
@@ -185,6 +189,7 @@ int OpusExportCurrentDocumentPdf()
 				rgch[cchOutput] = '\0';
 				OpusX64FontNameFromFtc(vchpFetch.ftc,
 						szFont, sizeof(szFont));
+				vOpusPdfExportStage = 100000 + (int)cpRun;
 				if (!OpusPdfSnapshotAddRun(rgch, cchOutput, szFont,
 						vchpFetch.hps, vchpFetch.fBold,
 						vchpFetch.fItalic, vchpFetch.kul != kulNone,
@@ -197,7 +202,9 @@ int OpusExportCurrentDocumentPdf()
 			}
 		cpPara = cpParaLim;
 		}
+	vOpusPdfExportStage = 3;
 	result = OpusPdfSnapshotExportDialog(vhwndApp);
+	vOpusPdfExportStage = result ? 4 : -4;
 	return result;
 }
 

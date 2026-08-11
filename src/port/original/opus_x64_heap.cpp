@@ -29,14 +29,18 @@ static_assert(offsetof(NativeHandle, data) == 0);
 constexpr int kPrcTokenNil = 0x3fff;
 constexpr int kPrcTokenMac = kPrcTokenNil - 1;
 constexpr int kCompactHandleMac = 0x3fff;
+constexpr std::size_t kNativeHandleSlots = 131071;
 constexpr std::size_t kSegmentSlots = 65536;
 constexpr std::size_t kGuardBytes = 64;
+constexpr std::size_t kMaxAllocationBytes = 256u * 1024u * 1024u;
 constexpr unsigned char kGuardValue = 0xa5;
 SRWLOCK prc_registry_lock = SRWLOCK_INIT;
 SRWLOCK compact_handle_lock = SRWLOCK_INIT;
+SRWLOCK native_handle_lock = SRWLOCK_INIT;
 SRWLOCK segment_registry_lock = SRWLOCK_INIT;
 void** prc_handles[kPrcTokenNil]{};
 void** compact_handles[kCompactHandleMac + 1]{};
+void** native_handles[kNativeHandleSlots]{};
 std::array<NativeSegment, kSegmentSlots> native_segments{};
 std::atomic_size_t heap_bytes_used{0};
 
@@ -47,12 +51,82 @@ std::atomic_size_t heap_bytes_used{0};
 
 [[nodiscard]] constexpr bool guarded_size(
     const std::size_t logical_size, std::size_t* result) noexcept {
+    if (logical_size > kMaxAllocationBytes) return false;
     const std::size_t payload = payload_size(logical_size);
     if (payload > (std::numeric_limits<std::size_t>::max)() - kGuardBytes) {
         return false;
     }
     *result = payload + kGuardBytes;
     return true;
+}
+
+[[nodiscard]] bool valid_native_handle(void** opaque_handle) noexcept {
+    if (opaque_handle == nullptr) return false;
+    void** const tombstone = reinterpret_cast<void**>(static_cast<uintptr_t>(1));
+    const std::size_t start =
+        (reinterpret_cast<uintptr_t>(opaque_handle) >> 4) % kNativeHandleSlots;
+    AcquireSRWLockShared(&native_handle_lock);
+    bool valid = false;
+    for (std::size_t probe = 0; probe < kNativeHandleSlots; ++probe) {
+        void** const candidate =
+            native_handles[(start + probe) % kNativeHandleSlots];
+        if (candidate == opaque_handle) {
+            valid = true;
+            break;
+        }
+        if (candidate == nullptr) break;
+        if (candidate == tombstone) continue;
+    }
+    ReleaseSRWLockShared(&native_handle_lock);
+    return valid;
+}
+
+[[nodiscard]] bool register_native_handle(void** opaque_handle) noexcept {
+    void** const tombstone = reinterpret_cast<void**>(static_cast<uintptr_t>(1));
+    const std::size_t start =
+        (reinterpret_cast<uintptr_t>(opaque_handle) >> 4) % kNativeHandleSlots;
+    AcquireSRWLockExclusive(&native_handle_lock);
+    std::size_t first_tombstone = kNativeHandleSlots;
+    for (std::size_t probe = 0; probe < kNativeHandleSlots; ++probe) {
+        const std::size_t index = (start + probe) % kNativeHandleSlots;
+        if (native_handles[index] == opaque_handle) {
+            ReleaseSRWLockExclusive(&native_handle_lock);
+            return true;
+        }
+        if (native_handles[index] == tombstone &&
+            first_tombstone == kNativeHandleSlots) first_tombstone = index;
+        if (native_handles[index] == nullptr) {
+            native_handles[first_tombstone == kNativeHandleSlots ?
+                               index : first_tombstone] = opaque_handle;
+            ReleaseSRWLockExclusive(&native_handle_lock);
+            return true;
+        }
+    }
+    if (first_tombstone != kNativeHandleSlots) {
+        native_handles[first_tombstone] = opaque_handle;
+        ReleaseSRWLockExclusive(&native_handle_lock);
+        return true;
+    }
+    ReleaseSRWLockExclusive(&native_handle_lock);
+    return false;
+}
+
+[[nodiscard]] bool unregister_native_handle(void** opaque_handle) noexcept {
+    void** const tombstone = reinterpret_cast<void**>(static_cast<uintptr_t>(1));
+    const std::size_t start =
+        (reinterpret_cast<uintptr_t>(opaque_handle) >> 4) % kNativeHandleSlots;
+    AcquireSRWLockExclusive(&native_handle_lock);
+    for (std::size_t probe = 0; probe < kNativeHandleSlots; ++probe) {
+        const std::size_t index = (start + probe) % kNativeHandleSlots;
+        if (native_handles[index] == opaque_handle) {
+            native_handles[index] = tombstone;
+            ReleaseSRWLockExclusive(&native_handle_lock);
+            return true;
+        }
+        if (native_handles[index] == nullptr) break;
+    }
+    ReleaseSRWLockExclusive(&native_handle_lock);
+    return false;
 }
 
 void set_guard(void* const allocation,
@@ -126,9 +200,11 @@ extern "C" HP OpusHpOfSbIbImpl(const SB segment, const uintptr_t offset) {
         return reinterpret_cast<HP>(static_cast<uintptr_t>(segment) + offset);
     }
     AcquireSRWLockShared(&segment_registry_lock);
-    void* base = native_segments[static_cast<std::size_t>(segment)].data;
+    const auto& slot = native_segments[static_cast<std::size_t>(segment)];
+    void* base = slot.data;
+    const std::size_t size = slot.size;
     ReleaseSRWLockShared(&segment_registry_lock);
-    return base == nullptr
+    return base == nullptr || offset > size
                ? nullptr
                : reinterpret_cast<HP>(reinterpret_cast<uintptr_t>(base) +
                                       offset);
@@ -323,7 +399,7 @@ extern "C" int FAssureHcb(void*** handle_address,
                             const int byte_count_needed, int* byte_count,
                             int* byte_capacity) {
     if (handle_address == nullptr || byte_count_needed < 0 ||
-        byte_capacity == nullptr) {
+        byte_capacity == nullptr || *byte_capacity < 0) {
         return 0;
     }
     if (byte_count != nullptr) {
@@ -332,7 +408,10 @@ extern "C" int FAssureHcb(void*** handle_address,
     if (*handle_address != nullptr && byte_count_needed <= *byte_capacity) {
         return 1;
     }
-    const int doubled = *byte_capacity > 0 ? *byte_capacity * 2 : 16;
+    const int doubled = *byte_capacity >
+            (std::numeric_limits<int>::max)() / 2 ?
+        (std::numeric_limits<int>::max)() :
+        (*byte_capacity > 0 ? *byte_capacity * 2 : 16);
     const int new_capacity = (std::max)(byte_count_needed, doubled);
     if (*handle_address == nullptr) {
         *handle_address = OpusHAllocateCb(static_cast<std::size_t>(new_capacity));
@@ -397,6 +476,11 @@ extern "C" void** OpusHAllocateCb(const std::size_t byte_count) {
     }
     set_guard(handle->data, byte_count);
     handle->size = byte_count;
+    if (!register_native_handle(reinterpret_cast<void**>(handle))) {
+        HeapFree(process_heap(), 0, handle->data);
+        HeapFree(process_heap(), 0, handle);
+        return nullptr;
+    }
     heap_bytes_used.fetch_add(byte_count, std::memory_order_relaxed);
     return reinterpret_cast<void**>(handle);
 }
@@ -404,6 +488,9 @@ extern "C" void** OpusHAllocateCb(const std::size_t byte_count) {
 extern "C" void OpusFreeH(void** opaque_handle) {
     if (opaque_handle == nullptr) {
         return;
+    }
+    if (!unregister_native_handle(opaque_handle)) {
+        report_guard_failure();
     }
     unregister_prc_handle(opaque_handle);
     unregister_compact_handle(opaque_handle);
@@ -432,6 +519,9 @@ extern "C" int OpusFChngSizeHCb(void** opaque_handle,
                                   const int allow_shrink) {
     if (opaque_handle == nullptr) {
         return 0;
+    }
+    if (!valid_native_handle(opaque_handle)) {
+        report_guard_failure();
     }
     auto* handle = reinterpret_cast<NativeHandle*>(opaque_handle);
     if (!allow_shrink && byte_count <= handle->size) {
@@ -470,7 +560,7 @@ extern "C" int OpusFChngSizePhqLcb(void*** handle_address,
 }
 
 extern "C" size_t OpusCbOfH(void** opaque_handle) {
-    return opaque_handle == nullptr
+    return !valid_native_handle(opaque_handle)
                ? 0
                : reinterpret_cast<NativeHandle*>(opaque_handle)->size;
 }
@@ -480,12 +570,13 @@ extern "C" size_t OpusHeapBytesUsed() {
 }
 
 extern "C" void* OpusDerefH(void** opaque_handle) {
-    return opaque_handle == nullptr
+    return !valid_native_handle(opaque_handle)
                ? nullptr
                : reinterpret_cast<NativeHandle*>(opaque_handle)->data;
 }
 
 extern "C" void* OpusHpAlloc(const std::size_t byte_count) {
+    if (byte_count > kMaxAllocationBytes) return nullptr;
     void* allocation =
         HeapAlloc(process_heap(), 0, byte_count == 0 ? 1 : byte_count);
     if (allocation != nullptr) {
@@ -500,9 +591,8 @@ extern "C" void* OpusHpAlloc(const std::size_t byte_count) {
 extern "C" void OpusFreeHp(void* pointer) {
     if (pointer != nullptr) {
         const SIZE_T size = HeapSize(process_heap(), 0, pointer);
-        if (size != static_cast<SIZE_T>(-1)) {
-            heap_bytes_used.fetch_sub(size, std::memory_order_relaxed);
-        }
+        if (size == static_cast<SIZE_T>(-1)) report_guard_failure();
+        heap_bytes_used.fetch_sub(size, std::memory_order_relaxed);
         HeapFree(process_heap(), 0, pointer);
     }
 }

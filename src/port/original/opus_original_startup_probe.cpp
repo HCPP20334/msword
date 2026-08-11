@@ -374,28 +374,6 @@ LONG WINAPI ObserveVectoredException(EXCEPTION_POINTERS* exception) {
 
 }  // namespace
 
-extern "C" void OpusX64TraceRibbon(const char* stage, int message, int tmc,
-                                    int first_value, int second_value,
-                                    long cp_first, long cp_limit,
-                                    int insertion) {
-    char trace_path[MAX_PATH] = {};
-    BuildDiagnosticPath("WORD1-ribbon.txt", trace_path, sizeof(trace_path));
-    HANDLE file = CreateFileA(trace_path, FILE_APPEND_DATA,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                              OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        return;
-    }
-    char line[384] = {};
-    std::snprintf(line, sizeof(line),
-                  "%llu %s msg=%d tmc=%d a=%d b=%d sel=%ld,%ld ins=%d\r\n",
-                  static_cast<unsigned long long>(GetTickCount64()),
-                  stage != nullptr ? stage : "", message, tmc, first_value,
-                  second_value, cp_first, cp_limit, insertion);
-    WriteCrashText(file, line);
-    CloseHandle(file);
-}
-
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous,
                     PWSTR command_line, int show_command) {
     if ((command_line != nullptr &&
@@ -403,6 +381,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous,
         std::wcsstr(GetCommandLineW(), L"--self-test") != nullptr) {
         return 0;
     }
+
+    /* Exclude the current directory and PATH from DLL resolution.  The app
+       directory remains available for intentionally deployed components and
+       system DLLs are resolved only from System32. */
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR |
+                             LOAD_LIBRARY_SEARCH_SYSTEM32 |
+                             LOAD_LIBRARY_SEARCH_USER_DIRS);
+    SetSearchPathMode(BASE_SEARCH_PATH_ENABLE_SAFE_SEARCHMODE |
+                      BASE_SEARCH_PATH_PERMANENT);
 
     SetUnhandledExceptionFilter(WriteCrashStack);
     AddVectoredExceptionHandler(1, ObserveVectoredException);

@@ -325,7 +325,8 @@ int main() {
         EndSdm();
         return 23;
     }
-    TestDltHeader modal_template{{8, 24, 206, 104}, 3, 0x8400,
+    /* Character is native-modal but is not routed to a common file dialog. */
+    TestDltHeader modal_template{{8, 24, 206, 104}, 16, 0x8400,
                                   reinterpret_cast<void*>(ModalRuntimeProbe),
                                   11, 4};
     auto* modal_template_pointer = &modal_template;

@@ -959,8 +959,10 @@ int wmain(const int argument_count, wchar_t** arguments) {
             }
         }
         bool rich_pdf_valid = !docx_pdf_export_mode;
-        if (docx_pdf_export_mode &&
-            PostMessageW(main_window, kWmCommand, kExportPdf, 0)) {
+        DWORD_PTR export_result = 0;
+        if (docx_pdf_export_mode && SendMessageTimeoutW(
+                main_window, kWmCommand, kExportPdf, 0,
+                SMTO_ABORTIFHUNG | SMTO_BLOCK, 30000, &export_result)) {
             const ULONGLONG pdf_deadline = GetTickCount64() + 15000;
             do {
                 std::ifstream input(pdf_path, std::ios::binary);
@@ -1001,7 +1003,11 @@ int wmain(const int argument_count, wchar_t** arguments) {
                       << "} bodyFont={index:" << body_font_index
                       << ",charset:" << body_font_charset << "}\n";
             if (docx_pdf_export_mode)
-                std::cerr << "richPdf=" << rich_pdf_valid << '\n';
+                std::cerr << "richPdf=" << rich_pdf_valid
+                          << " exportStage="
+                          << (pane != nullptr ? SendMessageW(
+                                  pane, kWmOpusX64QuerySelection, 105, 0) : -1)
+                          << '\n';
             if (!keep_pdf && !pdf_path.empty()) DeleteFileA(pdf_path.c_str());
             return 84;
         }

@@ -143,14 +143,21 @@ int CchCurSzPathNat(char* path, const int drive) {
     if (path == nullptr) {
         return 0;
     }
+    /* The original ABI requires callers to provide exactly 67 bytes.  Do not
+       copy a modern MAX_PATH-sized current directory into that legacy buffer. */
+    constexpr int kLegacyPathCapacity = 67;
     char current[MAX_PATH]{};
     if (_getdcwd(drive, current, static_cast<int>(sizeof(current))) ==
         nullptr) {
         path[0] = '\0';
         return 0;
     }
-    std::strcpy(path, current);
-    std::size_t length = std::strlen(path);
+    std::size_t length = std::strlen(current);
+    if (length + 2 > kLegacyPathCapacity) {
+        path[0] = '\0';
+        return 0;
+    }
+    std::memcpy(path, current, length + 1);
     if (length == 2 && path[1] == ':') {
         path[length++] = '\\';
         path[length] = '\0';

@@ -227,7 +227,8 @@ int scale(HWND window, int value) {
 
 void set_window_classic(HWND window) {
     using SetWindowThemeProc = HRESULT(WINAPI*)(HWND, LPCWSTR, LPCWSTR);
-    static HMODULE theme_module = LoadLibraryW(L"uxtheme.dll");
+    static HMODULE theme_module = LoadLibraryExW(
+        L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     static const auto set_theme = theme_module != nullptr ?
         reinterpret_cast<SetWindowThemeProc>(
             GetProcAddress(theme_module, "SetWindowTheme")) : nullptr;
@@ -454,7 +455,8 @@ void configure_word95_menus(HWND window) {
 void apply_caption_colors(HWND window) {
     using DwmSetWindowAttributeProc = HRESULT(WINAPI*)(HWND, DWORD,
                                                        LPCVOID, DWORD);
-    HMODULE module = LoadLibraryW(L"dwmapi.dll");
+    HMODULE module = LoadLibraryExW(
+        L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (module == nullptr) {
         return;
     }

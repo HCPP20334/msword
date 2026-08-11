@@ -1,11 +1,13 @@
 #include "opus_x64_compat.h"
 #include "opus_x64_heap.h"
 #include <commdlg.h>
+#include <objbase.h>
 extern "C" {
 #include "dac.h"
 }
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstdint>
@@ -21,10 +23,16 @@ extern std::uintptr_t wRefDlgCur;
 extern HWND vhWndMsgBoxParent;
 void GetCabSz(void**, char*, std::uint16_t, std::uint16_t);
 int FSetCabSz(void**, const char*, std::uint16_t);
-void OpusX64TraceRibbon(const char*, int, int, int, int, long, long, int);
 int OpusModernPathIsDocx(const char*);
 int OpusModernDocxToTextFile(const char*, const char*);
 int OpusModernRtfFileToDocx(const char*, const char*);
+}
+
+extern "C" void OpusX64TraceRibbon(const char*, int, int, int, int,
+                                     long, long, int) {
+    /* Ribbon tracing used during the bring-up of the x64 port.  Keep the ABI
+       for original call sites without writing diagnostic files in product or
+       test processes. */
 }
 
 /*
@@ -131,6 +139,7 @@ struct Win95SaveAlias {
 
 Win95SaveAlias g_win95_save_alias;
 std::unordered_map<std::string, std::string> g_win95_saved_aliases;
+std::string g_win95_staging_directory;
 
 struct Win95AliasCleanup {
     ~Win95AliasCleanup() {
@@ -140,6 +149,9 @@ struct Win95AliasCleanup {
         }
         for (const auto& saved : g_win95_saved_aliases) {
             DeleteFileA(saved.first.c_str());
+        }
+        if (!g_win95_staging_directory.empty()) {
+            RemoveDirectoryA(g_win95_staging_directory.c_str());
         }
     }
 };
@@ -154,41 +166,129 @@ std::string win95_alias_key(std::string path) {
     return path;
 }
 
+bool safe_dialog_file_path(const std::string& path, const bool must_exist) {
+    if (path.empty() || path.size() >= 32760 ||
+        path.starts_with(R"(\\.\)") ||
+        path.starts_with(R"(\\?\GLOBALROOT\)")) return false;
+    for (std::size_t index = 0; index < path.size(); ++index) {
+        if (path[index] == ':' && index != 1) return false;
+    }
+    const DWORD attributes = GetFileAttributesA(path.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES)
+        return (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+    return !must_exist && (GetLastError() == ERROR_FILE_NOT_FOUND ||
+                           GetLastError() == ERROR_PATH_NOT_FOUND);
+}
+
+bool import_file_within_limit(const std::string& path) {
+    if (!safe_dialog_file_path(path, true)) return false;
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard,
+                              &attributes)) return false;
+    constexpr ULONGLONG kMaximumImportBytes = 256ull * 1024ull * 1024ull;
+    const ULONGLONG size =
+        (static_cast<ULONGLONG>(attributes.nFileSizeHigh) << 32) |
+        attributes.nFileSizeLow;
+    return size <= kMaximumImportBytes;
+}
+
 bool make_win95_staging_path(std::string& path,
                              const char* desired_extension = ".DOC") {
-    char module_path[32768]{};
-    const DWORD module_length = GetModuleFileNameA(
-        nullptr, module_path, static_cast<DWORD>(std::size(module_path)));
-    if (module_length == 0 || module_length >= std::size(module_path)) {
-        return false;
-    }
-    char* separator = std::strrchr(module_path, '\\');
-    if (separator == nullptr) {
-        return false;
-    }
-    *separator = '\0';
-    std::string directory = std::string(module_path) + "\\W95TEMP";
-    if (!CreateDirectoryA(directory.c_str(), nullptr) &&
-        GetLastError() != ERROR_ALREADY_EXISTS) {
-        return false;
-    }
-    for (int attempt = 0; attempt < 32; ++attempt) {
-        char temporary[MAX_PATH]{};
-        if (GetTempFileNameA(directory.c_str(), "W95", 0, temporary) == 0) {
+    if (_stricmp(desired_extension, ".DOC") != 0 &&
+        _stricmp(desired_extension, ".TXT") != 0) return false;
+    if (g_win95_staging_directory.empty()) {
+        char temporary_root[32768]{};
+        const DWORD root_length = GetTempPathA(
+            static_cast<DWORD>(std::size(temporary_root)), temporary_root);
+        if (root_length == 0 || root_length >= std::size(temporary_root))
             return false;
+        for (int attempt = 0; attempt < 32; ++attempt) {
+            GUID identifier{};
+            if (FAILED(CoCreateGuid(&identifier))) return false;
+            char leaf[9]{};
+            _snprintf_s(leaf, std::size(leaf), _TRUNCATE, "W%07lX",
+                        identifier.Data1 & 0x0ffffffful);
+            const std::string candidate = std::string(temporary_root) + leaf;
+            /* The original normalizer requires DOS 8.3-safe path components
+               even though the native file APIs support long names. */
+            if (candidate.size() >= 52) return false;
+            if (CreateDirectoryA(candidate.c_str(), nullptr)) {
+                const DWORD attributes = GetFileAttributesA(candidate.c_str());
+                if (attributes == INVALID_FILE_ATTRIBUTES ||
+                    (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+                    RemoveDirectoryA(candidate.c_str());
+                    return false;
+                }
+                g_win95_staging_directory = candidate;
+                break;
+            }
+            if (GetLastError() != ERROR_ALREADY_EXISTS) return false;
         }
-        DeleteFileA(temporary);
-        char* existing_extension = std::strrchr(temporary, '.');
-        if (existing_extension != nullptr) {
-            lstrcpyA(existing_extension, desired_extension);
-        }
-        if (GetFileAttributesA(temporary) == INVALID_FILE_ATTRIBUTES &&
-            std::strlen(temporary) < 120) {
-            path = temporary;
+        if (g_win95_staging_directory.empty()) return false;
+    }
+    static std::atomic<unsigned long> sequence{0};
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        char leaf[18]{};
+        _snprintf_s(leaf, std::size(leaf), _TRUNCATE, "\\D%07lX%s",
+                    ++sequence & 0x0ffffffful, desired_extension);
+        const std::string candidate = g_win95_staging_directory + leaf;
+        if (candidate.size() >= 120) return false;
+        const DWORD attributes = GetFileAttributesA(candidate.c_str());
+        const DWORD attribute_error = GetLastError();
+        if (attributes == INVALID_FILE_ATTRIBUTES &&
+            (attribute_error == ERROR_FILE_NOT_FOUND ||
+             attribute_error == ERROR_PATH_NOT_FOUND)) {
+            path = candidate;
             return true;
         }
     }
     return false;
+}
+
+bool atomic_copy_file(const std::string& source, const std::string& target) {
+    if (source.empty() || target.empty()) return false;
+    static std::atomic<unsigned long> sequence{0};
+    std::string temporary;
+    bool copied = false;
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        temporary = target + ".word1tmp-" +
+            std::to_string(GetCurrentProcessId()) + "-" +
+            std::to_string(++sequence);
+        if (CopyFileA(source.c_str(), temporary.c_str(), TRUE)) {
+            copied = true;
+            break;
+        }
+        if (GetLastError() != ERROR_FILE_EXISTS &&
+            GetLastError() != ERROR_ALREADY_EXISTS) return false;
+    }
+    if (!copied) return false;
+    HANDLE file = CreateFileA(temporary.c_str(), GENERIC_WRITE,
+                              FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    const bool flushed = file != INVALID_HANDLE_VALUE &&
+                         FlushFileBuffers(file) != FALSE;
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    if (!flushed) {
+        DeleteFileA(temporary.c_str());
+        return false;
+    }
+    const DWORD attributes = GetFileAttributesA(target.c_str());
+    bool committed = false;
+    if (attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        committed = ReplaceFileA(target.c_str(), temporary.c_str(), nullptr,
+            REPLACEFILE_WRITE_THROUGH, nullptr, nullptr) != FALSE;
+        if (!committed) {
+            committed = MoveFileExA(temporary.c_str(), target.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+        }
+    } else if (attributes == INVALID_FILE_ATTRIBUTES &&
+               GetLastError() == ERROR_FILE_NOT_FOUND) {
+        committed = MoveFileExA(temporary.c_str(), target.c_str(),
+                                MOVEFILE_WRITE_THROUGH) != FALSE;
+    }
+    if (!committed) DeleteFileA(temporary.c_str());
+    return committed;
 }
 
 std::string counted_path(const unsigned char* st_file) {
@@ -2187,9 +2287,13 @@ Tmc run_word95_common_file_dialog(DialogState& dialog) {
         }
 
         char test_path[32768]{};
+#ifdef OPUS_TEST_HOOKS
         const DWORD test_path_length = GetEnvironmentVariableA(
             "WORD1_TEST_FILE_DIALOG_PATH", test_path,
             static_cast<DWORD>(std::size(test_path)));
+#else
+        const DWORD test_path_length = 0;
+#endif
         BOOL accepted = FALSE;
         if (test_path_length > 0 && test_path_length < std::size(test_path)) {
             lstrcpynA(file_buffer.data(), test_path,
@@ -2197,7 +2301,9 @@ Tmc run_word95_common_file_dialog(DialogState& dialog) {
             if (saving && OpusModernPathIsDocx(test_path)) {
                 file_dialog.nFilterIndex = 2;
             }
+#ifdef OPUS_TEST_HOOKS
             SetEnvironmentVariableA("WORD1_TEST_FILE_DIALOG_PATH", nullptr);
+#endif
             accepted = TRUE;
         } else {
             accepted = opening ? GetOpenFileNameA(&file_dialog) :
@@ -2231,6 +2337,16 @@ Tmc run_word95_common_file_dialog(DialogState& dialog) {
                 selected_path.replace(selected_dot, std::string::npos,
                                       ".docx");
             }
+        }
+        if ((opening && !import_file_within_limit(selected_path)) ||
+            (saving && !safe_dialog_file_path(selected_path, false))) {
+            MessageBoxA(owner,
+                opening ?
+                    "This document is not a regular file or is too large to open safely." :
+                    "This is not a safe document file name.",
+                opening ? "Open" : "Save As",
+                MB_OK | MB_ICONEXCLAMATION);
+            continue;
         }
         std::string legacy_path;
         const bool docx = OpusModernPathIsDocx(selected_path.c_str()) != 0;
@@ -2428,8 +2544,8 @@ int OpusFinishWin95SaveAlias(const unsigned char* st_file,
                 OpusModernRtfFileToDocx(
                     g_win95_save_alias.legacy_path.c_str(),
                     g_win95_save_alias.selected_path.c_str()) != 0 :
-                CopyFileA(g_win95_save_alias.legacy_path.c_str(),
-                          g_win95_save_alias.selected_path.c_str(), FALSE) != 0;
+                atomic_copy_file(g_win95_save_alias.legacy_path,
+                                 g_win95_save_alias.selected_path);
         }
         if (!success) {
             DeleteFileA(g_win95_save_alias.legacy_path.c_str());
@@ -2450,7 +2566,7 @@ int OpusFinishWin95SaveAlias(const unsigned char* st_file,
     }
     return OpusModernPathIsDocx(saved->second.c_str()) ?
         OpusModernRtfFileToDocx(path.c_str(), saved->second.c_str()) != 0 :
-        CopyFileA(path.c_str(), saved->second.c_str(), FALSE) != 0;
+        atomic_copy_file(path, saved->second);
 }
 
 int OpusWin95SaveAliasRequiresRtf(const unsigned char* st_file) {

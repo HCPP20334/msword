@@ -81,6 +81,10 @@ int wLow, wHigh;
 			int das;
 			BOOL f;
 
+#ifdef OPUS_X64
+			/* DDE execute is unauthenticated cross-process macro execution. */
+			goto LExeNACK;
+#endif
 			if (fTerminating || PdcldDcl(dcl)->fExecuting || fElActive)
 				goto LExeNACK;
 
@@ -117,6 +121,10 @@ LExeNACK:
 			int das = dasNACK;
 			int ibkmk;
 
+#ifdef OPUS_X64
+			/* Do not let another process overwrite an open document through DDE. */
+			goto LNackPoke;
+#endif
 			if (fTerminating)
 				/*  not much point in receiving while terminating */
 				{
